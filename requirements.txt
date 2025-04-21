@@ -1,3 +1,6 @@
-langchain
+gradio
+requests
+langchain-core
+langchain-openai
 langgraph
-langchain_openai
+openai
