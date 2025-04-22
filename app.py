@@ -5,7 +5,7 @@ import inspect # To get source code for __repr__
 import pandas as pd # For displaying results in a table
 
 # --- Constants ---
-DEFAULT_API_URL = "http://127.0.0.1:8000" # Default URL for your FastAPI app
+DEFAULT_API_URL = "https://jofthomas-unit4-scoring.hf.space/" # Default URL for your FastAPI app
 
 # --- Basic Agent Definition ---
 
