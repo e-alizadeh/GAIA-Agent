@@ -42,17 +42,19 @@ class BasicAgent:
 
 # --- Gradio UI and Logic ---
 
-def run_and_submit_all(api_url: str, username: str):
+def run_and_submit_all( profile gr.OAuthProfile , api_url: str):
     """
     Fetches all questions, runs the BasicAgent on them, submits all answers,
     and displays the results.
     """
-    if not api_url:
-        return "Please enter the API URL.", None # Status, DataFrame
-    if not username:
-        return "Please enter your Hugging Face username.", None # Status, DataFrame
+    
+    if profile:
+        username= f"{profile.name}"
+        
+    else:
+        return "Please Login to Hugging Face with the button.", None 
 
-    api_url = api_url.strip('/')
+    api_url = DEFAULT_API_URL
     questions_url = f"{api_url}/questions"
     submit_url = f"{api_url}/submit"
 
@@ -179,9 +181,7 @@ with gr.Blocks() as demo:
         "submit all answers at once, and display the results."
     )
 
-    with gr.Row():
-        api_url_input = gr.Textbox(label="FastAPI API URL", value=DEFAULT_API_URL)
-        hf_username_input = gr.Textbox(label="Hugging Face Username")
+    gr.LoginButton()
 
     run_button = gr.Button("Run Evaluation & Submit All Answers")
 
@@ -191,7 +191,6 @@ with gr.Blocks() as demo:
     # --- Component Interaction ---
     run_button.click(
         fn=run_and_submit_all,
-        inputs=[api_url_input, hf_username_input],
         outputs=[status_output, results_table]
     )
 
