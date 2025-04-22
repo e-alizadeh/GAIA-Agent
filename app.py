@@ -42,6 +42,26 @@ class BasicAgent:
 
 # --- Gradio UI and Logic ---
 
+def get_current_script_content() -> str:
+    """Attempts to read and return the content of the currently running script."""
+    try:
+        # __file__ holds the path to the current script
+        script_path = os.path.abspath(__file__)
+        print(f"Reading script content from: {script_path}")
+        with open(script_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except NameError:
+        # __file__ is not defined (e.g., running in an interactive interpreter)
+        print("Warning: __file__ is not defined. Cannot read script content.")
+        return "# Agent code unavailable: __file__ not defined"
+    except FileNotFoundError:
+        print(f"Warning: Script file '{script_path}' not found.")
+        return f"# Agent code unavailable: Script file not found at {script_path}"
+    except Exception as e:
+        print(f"Error reading script file '{script_path}': {e}")
+        return f"# Agent code unavailable: Error reading script file: {e}"
+
+
 def run_and_submit_all( profile: gr.OAuthProfile | None):
     """
     Fetches all questions, runs the BasicAgent on them, submits all answers,
@@ -67,7 +87,7 @@ def run_and_submit_all( profile: gr.OAuthProfile | None):
     except Exception as e:
         print(f"Error instantiating agent or getting repr: {e}")
         return f"Error initializing agent: {e}", None
-
+    agent_code=get_current_script_content()
     # 2. Fetch All Questions
     print(f"Fetching questions from: {questions_url}")
     try:
