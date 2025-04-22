@@ -42,7 +42,7 @@ class BasicAgent:
 
 # --- Gradio UI and Logic ---
 
-def run_and_submit_all( profile gr.OAuthProfile , api_url: str):
+def run_and_submit_all( profile: gr.OAuthProfile | None):
     """
     Fetches all questions, runs the BasicAgent on them, submits all answers,
     and displays the results.
