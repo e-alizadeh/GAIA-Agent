@@ -69,8 +69,7 @@ def run_and_submit_all( profile: gr.OAuthProfile | None):
     """
     
     if profile:
-        print(profile)
-        username= f"{profile.name}"
+        username= f"{profile.username}"
         
     else:
         return "Please Login to Hugging Face with the button.", None 
