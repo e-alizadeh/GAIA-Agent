@@ -98,7 +98,7 @@ async def Answer_from_agent(message: str, history: List[List[str]]) -> AsyncGene
 
 # --- Gradio Interface (mostly unchanged) ---
 demo = gr.ChatInterface(
-    fn=stream_from_agent,
+    fn=Answer_from_agent,
     type="messages",
     title="🤖 AGent template",
     description="Ask about the weather anywhere! Watch as I gather the information step by step.",
