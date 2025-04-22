@@ -49,6 +49,7 @@ def run_and_submit_all( profile: gr.OAuthProfile | None):
     """
     
     if profile:
+        print(profile)
         username= f"{profile.name}"
         
     else:
