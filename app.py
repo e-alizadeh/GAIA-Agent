@@ -113,6 +113,6 @@ if __name__ == "__main__":
         openai_api_key = os.getenv("OPENAI_API_KEY")
         if openai_api_key:
             print("OPENAI_API_KEY found.")
-        else:
-            print("Warning: OPENAI_API_KEY not found in environment variables.")
+    except:
+        alert("Warning: OPENAI_API_KEY not found in environment variables.")
     demo.launch(debug=True, server_name="0.0.0.0")
