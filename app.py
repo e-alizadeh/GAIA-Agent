@@ -196,7 +196,8 @@ def run_and_submit_all( profile: gr.OAuthProfile | None):
 with gr.Blocks() as demo:
     gr.Markdown("# Basic Agent Evaluation Runner")
     gr.Markdown(
-        "Enter the API URL and your username, then click Run. "
+        "Please cloen this space, then modify the code to what you deem relevant."
+        "Connect to your Hugging Face account using the log in button in the space to use your username, then click Run. "
         "This will fetch all questions, run the *very basic* agent on them, "
         "submit all answers at once, and display the results."
     )
