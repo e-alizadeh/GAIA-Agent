@@ -252,8 +252,8 @@ with gr.Blocks() as demo:
 
     run_button = gr.Button("Run Evaluation & Submit All Answers")
 
-    status_output = gr.Textbox(label="Run Status / Submission Result", lines=5, interactive=False) # Increased lines
-    results_table = gr.DataFrame(label="Questions and Agent Answers", wrap=True, max_rows=10) # Added max_rows
+    status_output = gr.Textbox(label="Run Status / Submission Result", lines=5, interactive=False)
+    results_table = gr.DataFrame(label="Questions and Agent Answers", wrap=True) 
 
     # --- Component Interaction ---
     # Use the profile information directly from the LoginButton state (implicitly passed)
