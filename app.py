@@ -2,7 +2,7 @@ import os
 import gradio as gr
 import requests
 import inspect # To get source code for __repr__
-import pandas as pd 
+import pandas as pd
 
 # --- Constants ---
 DEFAULT_API_URL = "https://jofthomas-unit4-scoring.hf.space/" # Default URL for your FastAPI app
@@ -30,16 +30,24 @@ class BasicAgent:
         print(f"Agent returning fixed answer: {fixed_answer}")
         return fixed_answer
 
+    # __repr__ seems intended to get the *source* code, not just representation
+    # Let's keep it but note that get_current_script_content might be more robust
+    # if the class definition changes significantly or relies on external state.
     def __repr__(self) -> str:
         """
         Return the source code required to reconstruct this agent.
+        NOTE: This might be brittle. Using get_current_script_content is likely safer.
         """
         imports = [
-            "import inspect\n" # May not be strictly needed by the agent logic itself
+            "import inspect\n"
         ]
-        class_source = inspect.getsource(BasicAgent)
-        full_source = "\n".join(imports) + "\n" + class_source
-        return full_source
+        try:
+            class_source = inspect.getsource(BasicAgent)
+            full_source = "\n".join(imports) + "\n" + class_source
+            return full_source
+        except Exception as e:
+            print(f"Error getting source code via inspect: {e}")
+            return f"# Could not get source via inspect: {e}"
 
 # --- Gradio UI and Logic ---
 def get_current_script_content() -> str:
@@ -51,8 +59,9 @@ def get_current_script_content() -> str:
         with open(script_path, 'r', encoding='utf-8') as f:
             return f.read()
     except NameError:
-        # __file__ is not defined (e.g., running in an interactive interpreter)
-        print("Warning: __file__ is not defined. Cannot read script content.")
+        # __file__ is not defined (e.g., running in an interactive interpreter or frozen app)
+        print("Warning: __file__ is not defined. Cannot read script content this way.")
+        # Fallback or alternative method could be added here if needed
         return "# Agent code unavailable: __file__ not defined"
     except FileNotFoundError:
         print(f"Warning: Script file '{script_path}' not found.")
@@ -67,12 +76,28 @@ def run_and_submit_all( profile: gr.OAuthProfile | None):
     Fetches all questions, runs the BasicAgent on them, submits all answers,
     and displays the results.
     """
-    
+    # --- Determine HF Space URL and Print Environment Info ---
+    space_host = os.getenv("SPACE_HOST")
+    hf_space_url = "Runtime: Locally or unknown environment (SPACE_HOST env var not found)"
+    if space_host:
+         # Construct the standard URL format for HF Spaces
+         hf_space_url = f"Runtime: Hugging Face Space (https://{space_host}.hf.space)"
+
+    # Print runtime info at the start of the function execution
+    print("\n" + "="*60)
+    print("Executing run_and_submit_all function...")
+    print(hf_space_url) # Print the determined runtime URL
+    # --- End Environment Info ---
+
     if profile:
         username= f"{profile.username}"
-        
+        print(f"User logged in: {username}")
     else:
-        return "Please Login to Hugging Face with the button.", None 
+        print("User not logged in.")
+        print("="*60 + "\n") # Close the separator block
+        return "Please Login to Hugging Face with the button.", None # Return early
+
+    print("="*60 + "\n") # Separator after initial checks if logged in
 
     api_url = DEFAULT_API_URL
     questions_url = f"{api_url}/questions"
@@ -81,33 +106,46 @@ def run_and_submit_all( profile: gr.OAuthProfile | None):
     # 1. Instantiate the Agent
     try:
         agent = BasicAgent()
-        agent_code = agent.__repr__()
-        # print(f"Agent Code (first 200): {agent_code[:200]}...") # Debug
+        # Using get_current_script_content() is likely more reliable for submission
+        # agent_code = agent.__repr__() # Keep if needed, but prefer file content
+        # print(f"Agent Code via __repr__ (first 200): {agent_code[:200]}...") # Debug
     except Exception as e:
-        print(f"Error instantiating agent or getting repr: {e}")
+        print(f"Error instantiating agent: {e}")
         return f"Error initializing agent: {e}", None
-    agent_code=get_current_script_content()
+
+    # Get agent code by reading the current script file - generally more robust
+    agent_code = get_current_script_content()
+    if agent_code.startswith("# Agent code unavailable"):
+        print("Warning: Using potentially incomplete agent code due to reading error.")
+        # Optional: Fall back to agent.__repr__() if needed
+        # agent_code = agent.__repr__()
+
     # 2. Fetch All Questions
     print(f"Fetching questions from: {questions_url}")
     try:
         response = requests.get(questions_url, timeout=15)
-        response.raise_for_status()
+        response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
         questions_data = response.json()
         if not questions_data:
-             return "Fetched questions list is empty.", None
+             print("Fetched questions list is empty.")
+             return "Fetched questions list is empty or invalid format.", None
         print(f"Fetched {len(questions_data)} questions.")
-        status_update = f"Fetched {len(questions_data)} questions. Running agent..."
-        # Yield intermediate status if using gr.update
+        # status_update = f"Fetched {len(questions_data)} questions. Running agent..." # For yield/streaming
     except requests.exceptions.RequestException as e:
         print(f"Error fetching questions: {e}")
         return f"Error fetching questions: {e}", None
-    except Exception as e:
+    except requests.exceptions.JSONDecodeError as e:
+         print(f"Error decoding JSON response from questions endpoint: {e}")
+         print(f"Response text: {response.text[:500]}") # Log response text for debugging
+         return f"Error decoding server response for questions: {e}", None
+    except Exception as e: # Catch other potential errors
         print(f"An unexpected error occurred fetching questions: {e}")
         return f"An unexpected error occurred fetching questions: {e}", None
 
     # 3. Run Agent on Each Question
     results_log = [] # To store data for the results table
     answers_payload = [] # To store data for the submission API
+    print(f"Running agent on {len(questions_data)} questions...")
     for item in questions_data:
         task_id = item.get("task_id")
         question_text = item.get("question")
@@ -129,31 +167,33 @@ def run_and_submit_all( profile: gr.OAuthProfile | None):
             })
         except Exception as e:
              print(f"Error running agent on task {task_id}: {e}")
-             # Decide how to handle agent errors - skip? submit default?
-             # Here, we'll just log and potentially skip submission for this task if needed
              results_log.append({
                 "Task ID": task_id,
                 "Question": question_text,
                 "Submitted Answer": f"AGENT ERROR: {e}"
             })
-
+             # Decide if you want to submit agent errors or skip:
+             # answers_payload.append({"task_id": task_id, "submitted_answer": f"AGENT ERROR: {e}"})
 
     if not answers_payload:
+        print("Agent did not produce any answers to submit.")
+        # Still show results log even if nothing submitted
         return "Agent did not produce any answers to submit.", pd.DataFrame(results_log)
 
     # 4. Prepare Submission
     submission_data = {
         "username": username.strip(),
-        "agent_code": agent_code,
+        "agent_code": agent_code, # Using the code read from file
         "answers": answers_payload
     }
-    status_update = f"Agent finished. Submitting {len(answers_payload)} answers..."
+    status_update = f"Agent finished. Submitting {len(answers_payload)} answers for user '{username}'..."
     print(status_update)
 
     # 5. Submit to Leaderboard
     print(f"Submitting {len(answers_payload)} answers to: {submit_url}")
     try:
-        response = requests.post(submit_url, json=submission_data, timeout=45) # Increased timeout
+        # Ensure submission_data is serializable, agent_code should be string
+        response = requests.post(submit_url, json=submission_data, timeout=60) # Increased timeout further
         response.raise_for_status()
         result_data = response.json()
 
@@ -161,31 +201,38 @@ def run_and_submit_all( profile: gr.OAuthProfile | None):
         final_status = (
             f"Submission Successful!\n"
             f"User: {result_data.get('username')}\n"
-            f"Overall Score: {result_data.get('score')}% "
-            f"({result_data.get('correct_count')}/{result_data.get('total_attempted')} correct)\n"
-            f"Message: {result_data.get('message')}"
+            f"Overall Score: {result_data.get('score', 'N/A')}% "
+            f"({result_data.get('correct_count', '?')}/{result_data.get('total_attempted', '?')} correct)\n"
+            f"Message: {result_data.get('message', 'No message received.')}"
         )
         print("Submission successful.")
         results_df = pd.DataFrame(results_log)
         return final_status, results_df
 
     except requests.exceptions.HTTPError as e:
-        error_detail = e.response.text
+        error_detail = f"Server responded with status {e.response.status_code}."
         try:
+            # Try to get more specific error detail from JSON response body
             error_json = e.response.json()
-            error_detail = error_json.get('detail', error_detail)
+            error_detail += f" Detail: {error_json.get('detail', e.response.text)}"
         except requests.exceptions.JSONDecodeError:
-            pass
-        status_message = f"Submission Failed (HTTP {e.response.status_code}): {error_detail}"
+            # If response is not JSON, use the raw text
+            error_detail += f" Response: {e.response.text[:500]}" # Limit length
+        status_message = f"Submission Failed: {error_detail}"
         print(status_message)
         results_df = pd.DataFrame(results_log) # Show attempts even if submission failed
+        return status_message, results_df
+    except requests.exceptions.Timeout:
+        status_message = "Submission Failed: The request timed out."
+        print(status_message)
+        results_df = pd.DataFrame(results_log)
         return status_message, results_df
     except requests.exceptions.RequestException as e:
         status_message = f"Submission Failed: Network error - {e}"
         print(status_message)
         results_df = pd.DataFrame(results_log)
         return status_message, results_df
-    except Exception as e:
+    except Exception as e: # Catch unexpected errors during submission phase
         status_message = f"An unexpected error occurred during submission: {e}"
         print(status_message)
         results_df = pd.DataFrame(results_log)
@@ -196,25 +243,38 @@ def run_and_submit_all( profile: gr.OAuthProfile | None):
 with gr.Blocks() as demo:
     gr.Markdown("# Basic Agent Evaluation Runner")
     gr.Markdown(
-        "Please clone this space, then modify the code to what you deem relevant."
-        "Connect to your Hugging Face account using the log in button in the space to use your username, then click Run. "
-        "This will fetch all questions, run the *very basic* agent on them, "
-        "submit all answers at once, and display the results."
+        "Please clone this space, then modify the code to define your agent's logic within the `BasicAgent` class. " # Clarified instructions
+        "Log in to your Hugging Face account using the button below. This uses your HF username for submission. "
+        "Click 'Run Evaluation & Submit All Answers' to fetch questions, run your agent, submit answers, and see the score."
     )
 
     gr.LoginButton()
 
     run_button = gr.Button("Run Evaluation & Submit All Answers")
 
-    status_output = gr.Textbox(label="Run Status / Submission Result", lines=4, interactive=False)
-    results_table = gr.DataFrame(label="Questions and Agent Answers", wrap=True)
+    status_output = gr.Textbox(label="Run Status / Submission Result", lines=5, interactive=False) # Increased lines
+    results_table = gr.DataFrame(label="Questions and Agent Answers", wrap=True, max_rows=10) # Added max_rows
 
     # --- Component Interaction ---
+    # Use the profile information directly from the LoginButton state (implicitly passed)
     run_button.click(
         fn=run_and_submit_all,
+        # Input is implicitly the profile data from LoginButton state
         outputs=[status_output, results_table]
     )
 
 if __name__ == "__main__":
+    print("\n" + "-"*30 + " App Starting " + "-"*30)
+    # Check for SPACE_HOST at startup for information
+    space_host_startup = os.getenv("SPACE_HOST")
+    if space_host_startup:
+        print(f"✅ SPACE_HOST found: {space_host_startup}")
+        print(f"   App should be available at: https://{space_host_startup}.hf.space")
+    else:
+        print("ℹ️  SPACE_HOST environment variable not found (running locally or not on standard HF Space runtime).")
+        print("   App will likely be available at local URLs printed by Gradio below.")
+    print("-"*(60 + len(" App Starting ")) + "\n")
+
     print("Launching Gradio Interface for Basic Agent Evaluation...")
-    demo.launch(debug=True)
+    # Set share=False as the primary access point is the HF Space URL
+    demo.launch(debug=True, share=False)
