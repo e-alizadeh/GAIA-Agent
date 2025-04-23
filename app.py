@@ -10,7 +10,6 @@ DEFAULT_API_URL = "https://jofthomas-unit4-scoring.hf.space/"
 
 # --- Basic Agent Definition ---
 class BasicAgent:
-    # ... (keep agent code as is) ...
     def __init__(self):
         print("BasicAgent initialized.")
     def __call__(self, question: str) -> str:
@@ -18,34 +17,6 @@ class BasicAgent:
         fixed_answer = "This is a default answer."
         print(f"Agent returning fixed answer: {fixed_answer}")
         return fixed_answer
-    def __repr__(self) -> str:
-        imports = ["import inspect\n"]
-        try:
-            class_source = inspect.getsource(BasicAgent)
-            full_source = "\n".join(imports) + "\n" + class_source
-            return full_source
-        except Exception as e:
-            print(f"Error getting source code via inspect: {e}")
-            return f"# Could not get source via inspect: {e}"
-
-# --- Gradio UI and Logic ---
-def get_current_script_content() -> str:
-    # ... (keep function as is) ...
-    try:
-        script_path = os.path.abspath(__file__)
-        print(f"Reading script content from: {script_path}")
-        with open(script_path, 'r', encoding='utf-8') as f:
-            return f.read()
-    except NameError:
-        print("Warning: __file__ is not defined. Cannot read script content this way.")
-        return "# Agent code unavailable: __file__ not defined"
-    except FileNotFoundError:
-        print(f"Warning: Script file '{script_path}' not found.")
-        return f"# Agent code unavailable: Script file not found at {script_path}"
-    except Exception as e:
-        print(f"Error reading script file '{script_path}': {e}")
-        return f"# Agent code unavailable: Error reading script file: {e}"
-
 
 def run_and_submit_all( profile: gr.OAuthProfile | None):
     """
@@ -53,52 +24,28 @@ def run_and_submit_all( profile: gr.OAuthProfile | None):
     and displays the results.
     """
     # --- Determine HF Space Runtime URL and Repo URL ---
-    space_host = os.getenv("SPACE_HOST")
-    space_id = os.getenv("SPACE_ID") # Get the SPACE_ID
-
-    hf_runtime_url = "Runtime: Locally or unknown environment (SPACE_HOST not found)"
-    hf_repo_url = "HF Repo URL: Unknown (SPACE_ID not found)"
-    hf_repo_tree_url = "HF Repo Tree URL: Unknown (SPACE_ID not found)"
-
-    if space_host:
-         hf_runtime_url = f"Runtime URL: https://{space_host}.hf.space"
-
-    if space_id: # Construct URLs using SPACE_ID
-        hf_repo_url = f"HF Repo URL: https://huggingface.co/spaces/{space_id}"
-        hf_repo_tree_url = f"HF Repo Tree URL: https://huggingface.co/spaces/{space_id}/tree/main"
-
-    # Print runtime and repo info at the start
-    print("\n" + "="*60)
-    print("Executing run_and_submit_all function...")
-    print(hf_runtime_url) # Print the runtime URL (from SPACE_HOST)
-    print(hf_repo_url)    # Print the base repo URL (from SPACE_ID)
-    print(hf_repo_tree_url) # Print the repo tree URL (from SPACE_ID)
-    # --- End Environment Info ---
+    space_id = os.getenv("SPACE_ID") # Get the SPACE_ID for sending link to the code
 
     if profile:
         username= f"{profile.username}"
         print(f"User logged in: {username}")
     else:
         print("User not logged in.")
-        print("="*60 + "\n")
         return "Please Login to Hugging Face with the button.", None
 
-    print("="*60 + "\n")
-
-    # ... (rest of the function remains the same) ...
     api_url = DEFAULT_API_URL
     questions_url = f"{api_url}/questions"
     submit_url = f"{api_url}/submit"
 
-    # 1. Instantiate Agent
+    # 1. Instantiate Agent ( modify this part to create your agent)
     try:
         agent = BasicAgent()
     except Exception as e:
         print(f"Error instantiating agent: {e}")
         return f"Error initializing agent: {e}", None
-    agent_code = get_current_script_content()
-    if agent_code.startswith("# Agent code unavailable"):
-        print("Warning: Using potentially incomplete agent code due to reading error.")
+    # In the case of an app running as a hugging Face space, this link points toward your codebase ( usefull for others so please keep it public)
+    agent_code = "https://huggingface.co/spaces/{space_id}/tree/main"
+  
 
     # 2. Fetch Questions
     print(f"Fetching questions from: {questions_url}")
@@ -121,7 +68,7 @@ def run_and_submit_all( profile: gr.OAuthProfile | None):
         print(f"An unexpected error occurred fetching questions: {e}")
         return f"An unexpected error occurred fetching questions: {e}", None
 
-    # 3. Run Agent
+    # 3. Run your Agent
     results_log = []
     answers_payload = []
     print(f"Running agent on {len(questions_data)} questions...")
@@ -143,7 +90,7 @@ def run_and_submit_all( profile: gr.OAuthProfile | None):
         print("Agent did not produce any answers to submit.")
         return "Agent did not produce any answers to submit.", pd.DataFrame(results_log)
 
-    # 4. Prepare Submission
+    # 4. Prepare Submission 
     submission_data = {"username": username.strip(), "agent_code": agent_code, "answers": answers_payload}
     status_update = f"Agent finished. Submitting {len(answers_payload)} answers for user '{username}'..."
     print(status_update)
