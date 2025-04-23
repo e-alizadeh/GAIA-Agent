@@ -2,12 +2,13 @@ import os
 import gradio as gr
 import requests
 import inspect # To get source code for __repr__
-import pandas as pd # For displaying results in a table
+import pandas as pd 
 
 # --- Constants ---
 DEFAULT_API_URL = "https://jofthomas-unit4-scoring.hf.space/" # Default URL for your FastAPI app
 
 # --- Basic Agent Definition ---
+## This is where you should implement your own agent and tools
 
 class BasicAgent:
     """
@@ -41,7 +42,6 @@ class BasicAgent:
         return full_source
 
 # --- Gradio UI and Logic ---
-
 def get_current_script_content() -> str:
     """Attempts to read and return the content of the currently running script."""
     try:
