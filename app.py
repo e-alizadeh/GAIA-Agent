@@ -45,7 +45,7 @@ def run_and_submit_all( profile: gr.OAuthProfile | None):
         return f"Error initializing agent: {e}", None
     # In the case of an app running as a hugging Face space, this link points toward your codebase ( usefull for others so please keep it public)
     agent_code = "https://huggingface.co/spaces/{space_id}/tree/main"
-  
+    print(agent_code)
 
     # 2. Fetch Questions
     print(f"Fetching questions from: {questions_url}")
