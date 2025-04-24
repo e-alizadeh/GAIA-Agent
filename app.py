@@ -147,7 +147,7 @@ with gr.Blocks() as demo:
         """
         **Instructions:**
 
-        1.  Please clone this space, then modify the code to define your agent's logic within the `BasicAgent` class or outside if necessary.
+        1.  Please clone this space, then modify the code to define your agent's logic, the tools, the necessary packages, etc ...
         2.  Log in to your Hugging Face account using the button below. This uses your HF username for submission.
         3.  Click 'Run Evaluation & Submit All Answers' to fetch questions, run your agent, submit answers, and see the score.
 
