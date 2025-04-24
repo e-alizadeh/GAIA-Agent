@@ -6,7 +6,7 @@ import pandas as pd
 
 # (Keep Constants and BasicAgent class as is)
 # --- Constants ---
-DEFAULT_API_URL = "https://jofthomas-unit4-scoring.hf.space/"
+DEFAULT_API_URL = "https://agents-course-unit4-scoring.hf.space"
 
 # --- Basic Agent Definition ---
 class BasicAgent:
