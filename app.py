@@ -6,14 +6,13 @@ import operator
 import os
 import re
 import pandas as pd
-from typing import Annotated, TypedDict
+from typing import TypedDict
 import gradio as gr
 from langchain_openai import ChatOpenAI
 import requests
 from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
 from langchain.agents import tool
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from langgraph.graph.message import add_messages
+from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 
 # --- Constants ---
@@ -112,7 +111,6 @@ def _summarize_results(results_json: str, max_hits: int = 3) -> str:
 # --------------------------------------------------------------------------- #
 class AgentState(TypedDict):
     task_id: str
-    messages: Annotated[list[BaseMessage], add_messages]
     question: str
     answer: str
     search_results: str 
@@ -198,7 +196,7 @@ class GAIAAgent:
                 return state
         
         # 2️⃣ Attachment (Excel file)
-        if "attached" in q.lower() and ".xls" in q.lower():
+        if "attached" in q.lower() and "excel" in q.lower():
             try:
                 task_id = state.get("task_id")
                 file_url = f"{DEFAULT_API_URL}/files/{task_id}"
@@ -220,6 +218,7 @@ class GAIAAgent:
         state["search_results"] = results_json
         state["tools_used"].append("web_search")
         state["reasoning_steps"].append(f"Search: {query}")
+        state["answer"] = ""
 
         return state
 
@@ -233,15 +232,16 @@ class GAIAAgent:
         # Summarize search results for the LLM
         summary = _summarize_results(state["search_results"])
         if not summary:
-            summary = state['search_results'][:4000]  # cap to 4k chars
+            summary = state["search_results"][:4000]  # cap to 4k chars
 
-        state["context"] = "summary"
+        state["context"] = summary
         state["reasoning_steps"].append("Process")
         return state
     
     def _generate_answer(self, state: AgentState) -> AgentState:
         if state["answer"]:
-            # calculator already filled it                      
+            # calculator already filled it
+            print("\nCalculator is used ==> No LLM is invoked.\n")                      
             return state
         
         prompt = [
@@ -255,28 +255,38 @@ class GAIAAgent:
             ),
         ]
         response = self.llm.invoke(prompt)
+        print(f">>> Raw response from LLM:\n{response}\n\n")
         state["answer"] = response.content.strip()
         state["reasoning_steps"].append("Generate Answer")
         return state
 
     
     def _normalize_answer(self, state: AgentState) -> AgentState:
-        ans = state["answer"].strip()
+        raw = state["answer"].strip()
 
-        # Canonicalize numbers (remove commas) / lowercase yes|no
-        if re.fullmatch(r"[0-9][0-9,\.]*", ans):
-            ans = ans.replace(",", "")
-        if ans.lower() in {"yes", "no"}:
-            ans = ans.capitalize()
+        # 1️⃣ If there’s a pure number anywhere, keep only that number
+        num = re.search(r"\b\d[\d,\.]*\b", raw)
+        if num and len(raw) > len(num.group(0)):
+            raw = num.group(0)
 
-        if not ans:
-            ans = "No answer found"
+        # 2️⃣ Normalize Yes / No
+        if raw.lower().strip(".") in {"yes", "no"}:
+            raw = raw.capitalize()
 
-        state["answer"] = ans
-        state["reasoning_steps"].append("Answer verification completed.")
+        # 3️⃣ Remove leading 'User:', 'Answer:', etc.
+        raw = re.sub(r"^(User|Answer|Context):\s*", "", raw, flags=re.I)
+
+        # 4️⃣ Strip trailing punctuation and double-spaces
+        raw = raw.rstrip(".").strip()
+
+        if not raw:
+            raw = "No answer found"
+
+        state["answer"] = raw
+        state["reasoning_steps"].append("normalize")
         return state
     
-    def __call__(self, question: str, task_id: str) -> str:
+    def __call__(self, question: str, task_id: str = "") -> str:
         """Main agent call method."""
 
         print(f"GAIA Agent processing question: '{question}'\n")
@@ -284,7 +294,6 @@ class GAIAAgent:
         try:
             initial_state: AgentState = {
                 "task_id": task_id,
-                "messages": [],
                 "question": question,
                 "answer": "",
                 "search_results": "",
