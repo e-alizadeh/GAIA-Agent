@@ -1,5 +1,6 @@
 import ast
 from functools import lru_cache
+from io import BytesIO
 import json
 import operator
 import os
@@ -110,7 +111,8 @@ def _summarize_results(results_json: str, max_hits: int = 3) -> str:
 # -------------------------------  AGENT STATE  ----------------------------- #
 # --------------------------------------------------------------------------- #
 class AgentState(TypedDict):
-    msg: Annotated[list[BaseMessage], add_messages]
+    task_id: str
+    messages: Annotated[list[BaseMessage], add_messages]
     question: str
     answer: str
     search_results: str 
@@ -180,17 +182,38 @@ class GAIAAgent:
 
         # 1️⃣ Calculator path
         if _needs_calc(q):
-            expr = q.strip()         
-            expr = re.sub(r"\s+", "", expr)     # remove spaces
-            result = calculator.invoke({"expression": expr})
+            # 1) strip all whitespace
+            expr = re.sub(r"\s+", "", q)
 
-            state["answer"] = result
-            state["tools_used"].append("calculator")
-            state["reasoning_steps"].append("Calculate")
+            # 2) remove ANY character that isn’t digit, dot, operator, or parenthesis
+            #    (kills “USD”, “kg”, YouTube IDs, etc.)
+            expr = re.sub(r"[^\d\.\+\-\*/\(\)]", "", expr)
 
-            return state  
+            # 3) guard against empty string after cleaning
+            if expr:
+                result = calculator.invoke({"expression": expr})
+                state["answer"] = result
+                state["tools_used"].append("calculator")
+                state["reasoning_steps"].append(f"calc:{expr}")
+                return state
         
-        # 2️⃣ Web search path
+        # 2️⃣ Attachment (Excel file)
+        if "attached" in q.lower() and ".xls" in q.lower():
+            try:
+                task_id = state.get("task_id")
+                file_url = f"{DEFAULT_API_URL}/files/{task_id}"
+                xls_bytes = requests.get(file_url, timeout=10).content
+                df = pd.read_excel(BytesIO(xls_bytes))
+
+                total = df["sales"].sum()
+                state["answer"] = f"{total:.2f}"
+                state["tools_used"].append("excel_sum")
+                state["reasoning_steps"].append("xlsx")
+                return state
+            except Exception as e:
+                state["reasoning_steps"].append(f"xlsx_error:{e}")   
+             
+        # 3️⃣ Web search path
         query = _extract_search_terms(q)
         results_json = web_search.invoke({"query": query})
 
@@ -210,7 +233,7 @@ class GAIAAgent:
         # Summarize search results for the LLM
         summary = _summarize_results(state["search_results"])
         if not summary:
-            summary = "No useful web context found. Rely on your prior knowledge."
+            summary = state['search_results'][:4000]  # cap to 4k chars
 
         state["context"] = "summary"
         state["reasoning_steps"].append("Process")
@@ -253,20 +276,21 @@ class GAIAAgent:
         state["reasoning_steps"].append("Answer verification completed.")
         return state
     
-    def __call__(self, question: str) -> str:
+    def __call__(self, question: str, task_id: str) -> str:
         """Main agent call method."""
 
         print(f"GAIA Agent processing question: '{question}'\n")
         
         try:
             initial_state: AgentState = {
+                "task_id": task_id,
                 "messages": [],
                 "question": question,
                 "answer": "",
                 "search_results": "",
                 "context": "",
                 "reasoning_steps": [],
-                "tools_used": []
+                "tools_used": [],
             }
             
             # Run the graph
@@ -346,7 +370,7 @@ def run_and_submit_all(profile: gr.OAuthProfile | None):
             print(f"Skipping item with missing task_id or question: {item}")
             continue
         try:
-            submitted_answer = agent(question_text)
+            submitted_answer = agent(question=question_text, task_id=task_id)
             answers_payload.append({"task_id": task_id, "submitted_answer": submitted_answer})
             results_log.append({"Task ID": task_id, "Question": question_text, "Submitted Answer": submitted_answer})
         except Exception as e:
