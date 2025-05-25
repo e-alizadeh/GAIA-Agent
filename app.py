@@ -1,25 +1,261 @@
+import ast
+from functools import lru_cache
+import json
+import operator
 import os
+import re
+from typing import Annotated, TypedDict
 import gradio as gr
+from langchain_openai import ChatOpenAI
 import requests
-import inspect
 import pandas as pd
+from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
+from langchain.agents import tool
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolExecutor
+from langgraph.graph import StateGraph, END
 
-# (Keep Constants as is)
 # --- Constants ---
 DEFAULT_API_URL = "https://agents-course-unit4-scoring.hf.space"
 
-# --- Basic Agent Definition ---
 # ----- THIS IS WERE YOU CAN BUILD WHAT YOU WANT ------
-class BasicAgent:
-    def __init__(self):
-        print("BasicAgent initialized.")
-    def __call__(self, question: str) -> str:
-        print(f"Agent received question (first 50 chars): {question[:50]}...")
-        fixed_answer = "This is a default answer."
-        print(f"Agent returning fixed answer: {fixed_answer}")
-        return fixed_answer
+# --------------------------------------------------------------------------- #
+# -----------------------------  SAFE CALCULATOR  --------------------------- #
+# --------------------------------------------------------------------------- #
+_ALLOWED_OPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Pow: operator.pow,
+    ast.USub: operator.neg,
+}
 
-def run_and_submit_all( profile: gr.OAuthProfile | None):
+def _safe_eval(node: ast.AST) -> float:
+    if isinstance(node, ast.Num):  # literal number
+        return node.n
+    if isinstance(node, ast.UnaryOp) and type(node.op) in _ALLOWED_OPS:
+        return _ALLOWED_OPS[type(node.op)](_safe_eval(node.operand))
+    if isinstance(node, ast.BinOp) and type(node.op) in _ALLOWED_OPS:
+        return _ALLOWED_OPS[type(node.op)](
+            _safe_eval(node.left), _safe_eval(node.right)
+        )
+    raise ValueError("Unsafe or unsupported expression")
+
+@tool
+def calculator(expression: str) -> str:
+    """Calculate mathematical expressions safely."""
+    try:
+        tree = ast.parse(expression, mode="eval")
+        return str(_safe_eval(tree.body))
+    except Exception as exc:
+        return f"calc_error:{exc}"
+
+# --------------------------------------------------------------------------- #
+# -----------------------------     WEB SEARCH    --------------------------- #
+# --------------------------------------------------------------------------- #
+@lru_cache(maxsize=128)
+def _search_duckduckgo(query: str, k: int = 5) -> list[dict]:
+    """Returns the top-k DuckDuckGo results as a list of {title, snippet, link}. Caches identical queries."""
+
+    wrapper = DuckDuckGoSearchAPIWrapper(max_results=k)
+    raw = wrapper.results(query)
+    cleaned = []
+    for hit in raw[:k]:
+        cleaned.append(
+            {
+                "title": hit.get("title", "")[:120],
+                "snippet": hit.get("snippet", "")[:200],
+                "link": hit.get("link", "")[:200],
+            }
+        )
+    return cleaned
+
+@tool
+def web_search(query: str) -> str:
+    """DuckDuckGo search. Returns compact JSON (max 5 hits)."""
+    try:
+        return json.dumps(_search_duckduckgo(query), ensure_ascii=False)
+    except Exception as exc:
+        return f"search_error:{exc}"
+
+# --------------------------------------------------------------------------- #
+# -------------------------------  AGENT STATE  ----------------------------- #
+# --------------------------------------------------------------------------- #
+class AgentState(TypedDict):
+    msg: Annotated[list[BaseMessage], add_messages]
+    question: str
+    answer: str
+    search_results: str 
+    reasoning_steps: list[str]
+    tools_used: list[str]
+
+# --------------------------------------------------------------------------- #
+# -------------------------------  GAIA AGENT  ------------------------------ #
+# --------------------------------------------------------------------------- #
+class GAIAAgent:
+    """
+    LangGraph-powered agent targeting GAIA Level-1 tasks.
+    Key design points:
+      - Compact, cached web results -> lower token cost, less noise.
+      - Safe calculator (no eval foot-gun).
+      - Answer canonicalisation to hit GAIA's exact-match scoring.
+    """
+
+    SYSTEM_PROMPT = (
+        "You are an expert question-answering agent. "
+        "Return ONLY the final answer—no rationale, no extra words."
+    )
+
+    def __init__(self):
+        try:
+            self.llm = ChatOpenAI(
+                model="gpt-3.5-turbo", 
+                temperature=0.1,
+                api_key=os.getenv("OPENAI_API_KEY")
+            )
+        except Exception as e:
+            print(f"Warning: Could not initialize OpenAI model: {e}")
+            self.llm = None
+
+        # Define tools & executor
+        self.tools = [web_search, calculator]
+        self.tool_executor = ToolExecutor(self.tools)
+
+        self.graph = self._build_graph()
+
+    def _build_graph(self) -> StateGraph:
+        """Build the LangGraph workflow."""
+        workflow = StateGraph(AgentState)
+
+        # Add nodes
+        workflow.add_node("analyze_question", self._analyze_question)
+        workflow.add_node("search", self._search_info)
+        workflow.add_node("process", self._process_info)
+        workflow.add_node("generate_answer", self._generate_answer)
+        workflow.add_node("verify_answer", self._verify_answer)
+
+        # Add edges
+        workflow.set_entry_point("analyze_question")
+        workflow.add_edge("analyze_question", "search")
+        workflow.add_edge("search", "process")
+        workflow.add_edge("process", "generate_answer")
+        workflow.add_edge("generate_answer", "verify")
+        workflow.add_edge("verify", END)
+
+        return workflow.compile()
+
+    # ------------------ NODE IMPLEMENTATIONS ------------------ #
+    def _extract_search_terms(self, question: str) -> str:
+        stops = {
+            "what", "who", "where", "when", "how", "why",
+            "is", "are", "was", "were", "the", "and", "or",
+        }
+        tokens = re.findall(r"[A-Za-z0-9]+", question.lower())
+        key = [tok for tok in tokens if tok not in stops][:6]
+        return " ".join(key)
+
+    def _analyse_question(self, state: AgentState) -> AgentState:
+        q = state["question"]
+        state["reasoning_steps"] = [f"analyse:{q[:60]}…"]
+        return state
+    def _search_information(self, state: AgentState) -> AgentState:
+        query = self._extract_search_terms(state["question"])
+        state["reasoning_steps"].append(f"search:{query}")
+        results_json = web_search.invoke({"query": query})
+        state["search_results"] = results_json
+        state["tools_used"].append("web_search")
+        return state
+
+    def _generate_answer(self, state: AgentState) -> AgentState:
+        prompt = [
+            SystemMessage(content=self.SYSTEM_PROMPT),
+            HumanMessage(
+                content=(
+                    f"Question: {state['question']}\n"
+                    f"Search Results (JSON): {state['search_results']}\n"
+                    f"Answer:"
+                )
+            ),
+        ]
+        rsp = self.llm(prompt)
+        state["answer"] = rsp.content.strip()
+        state["reasoning_steps"].append("synth")
+        return state
+
+    
+    def _fallback_answer(self, question: str, search_results: str) -> str:
+        """Fallback answer generation without LLM using rule-based reasoning."""
+        if "yes" in question.lower() or "no" in question.lower():
+            return "Yes" if "yes" in search_results.lower() else "No"
+
+        # Extract numbers for numeric questions
+        if any(word in question.lower() for word in ["how many", "count", "number"]):
+            numbers = re.findall(r'\d+', search_results)
+            if numbers:
+                return numbers[0]
+            
+        # Extract years for date questions
+        if "when" in question.lower() or "year" in question.lower():
+            years = re.findall(r'\b(19|20)\d{2}\b', search_results)
+            if years:
+                return years[0]
+
+        # Default: extract first sentence from search results
+        sentences = search_results.split('.')
+        if sentences:
+            return sentences[0].strip()
+        
+        return "Unable to determine answer from available information."
+    
+
+    def _verify_answer(self, state: AgentState) -> AgentState:
+        ans = state["answer"].strip()
+
+        # Canonicalise numbers (remove commas) / lowercase yes|no
+        if re.fullmatch(r"[0-9][0-9,\.]*", ans):
+            ans = ans.replace(",", "")
+        if ans.lower() in {"yes", "no"}:
+            ans = ans.capitalize()
+
+        if not ans:
+            ans = "No answer found"
+
+        state["answer"] = ans
+        state["reasoning_steps"].append("Answer verification completed.")
+        return state
+    
+    def __call__(self, question: str) -> str:
+        """Main agent call method."""
+        print(f"GAIA Agent processing question: {question[:100]}...")
+        
+        try:
+            initial_state: AgentState = {
+                "messages": [],
+                "question": question,
+                "answer": "",
+                "search_results": "",
+                "reasoning_steps": [],
+                "tools_used": []
+            }
+            
+            # Run the graph
+            final_state = self.graph.invoke(initial_state)
+            
+            answer = final_state["answer"]
+            print(f"Agent reasoning: {' -> '.join(final_state['reasoning_steps'])}")
+            print(f"Tools used: {final_state['tools_used']}")
+            print(f"Final answer: {answer}")
+            
+            return answer
+            
+        except Exception as e:
+            print(f"Error in agent processing: {e}")
+            return f"Error processing question: {str(e)}"
+
+
+def run_and_submit_all(profile: gr.OAuthProfile | None):
     """
     Fetches all questions, runs the BasicAgent on them, submits all answers,
     and displays the results.
@@ -40,7 +276,8 @@ def run_and_submit_all( profile: gr.OAuthProfile | None):
 
     # 1. Instantiate Agent ( modify this part to create your agent)
     try:
-        agent = BasicAgent()
+        agent = GAIAAgent()
+        print("GAIA Agent initialized successfully")
     except Exception as e:
         print(f"Error instantiating agent: {e}")
         return f"Error initializing agent: {e}", None
