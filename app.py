@@ -85,10 +85,8 @@ def web_search(query: str) -> str:
 #                                HELPER FUNCTIONS                             #
 # --------------------------------------------------------------------------- #
 def _needs_calc(q: str) -> bool:
-    return bool(
-        re.search(r"\b(percent|ratio|average|difference|total)\b", q.lower())
-        or re.search(r"[\+\-\*/]", q)
-    )
+    math_expr = re.compile(r"^\s*[\d\.\s\+\-\*/\(\)]+?\s*$")
+    return bool(math_expr.match(q))
 
 
 def _extract_search_terms(question: str) -> str:
@@ -104,10 +102,9 @@ def _summarize_results(results_json: str, max_hits: int = 3) -> str:
     """Turn JSON list of hits into a compact text context for the LLM."""
     try:
         hits = json.loads(results_json)[:max_hits]
+        return "\n".join(f"- {h['title']}: {h['snippet']}" for h in hits)
     except Exception:
         return ""
-    bullets = [f"- {h['title']}: {h['snippet']}" for h in hits]
-    return "\n".join(bullets)
 
 # --------------------------------------------------------------------------- #
 # -------------------------------  AGENT STATE  ----------------------------- #
@@ -128,8 +125,8 @@ class GAIAAgent:
     """LangGraph-powered agent targeting GAIA Level-1 tasks."""
 
     SYSTEM_PROMPT = (
-        "You are an expert question-answering agent. "
-        "Return ONLY the final answer—no rationale, no extra words."
+        "You are an expert answer bot. "
+        "Return ONLY the final answer string—no extra words."
     )
 
     def __init__(self):
@@ -156,15 +153,15 @@ class GAIAAgent:
 
         # Add nodes
         workflow.add_node("analyze_question", self._analyze_question)
-        workflow.add_node("search_or_calc", self._search_or_calc)
+        workflow.add_node("route", self._route)
         workflow.add_node("process_info", self._process_info)
         workflow.add_node("generate_answer", self._generate_answer)
         workflow.add_node("normalize_answer", self._normalize_answer)
 
         # Add edges
         workflow.set_entry_point("analyze_question")
-        workflow.add_edge("analyze_question", "search_or_calc")
-        workflow.add_edge("search_or_calc", "process_info")
+        workflow.add_edge("analyze_question", "route")
+        workflow.add_edge("route", "process_info")
         workflow.add_edge("process_info", "generate_answer")
         workflow.add_edge("generate_answer", "normalize_answer")
         workflow.add_edge("normalize_answer", END)
@@ -178,7 +175,7 @@ class GAIAAgent:
         state["reasoning_steps"] = [f"Analyze: {q[:60]}"]
         return state
 
-    def _search_or_calc(self, state: AgentState) -> AgentState:
+    def _route(self, state: AgentState) -> AgentState:
         q = state["question"]
 
         # 1️⃣ Calculator path
@@ -207,10 +204,15 @@ class GAIAAgent:
     def _process_info(self, state: AgentState) -> AgentState:
         if state["answer"]:
             # If calc already produced an answer, just pass through
+            state["context"] = ""
             return state
 
         # Summarize search results for the LLM
-        state["context"] = _summarize_results(state["search_results"])
+        summary = _summarize_results(state["search_results"])
+        if not summary:
+            summary = "No useful web context found. Rely on your prior knowledge."
+
+        state["context"] = "summary"
         state["reasoning_steps"].append("Process")
         return state
     
@@ -229,8 +231,8 @@ class GAIAAgent:
                 )
             ),
         ]
-        rsp = self.llm.invoke(prompt)
-        state["answer"] = rsp.content.strip()
+        response = self.llm.invoke(prompt)
+        state["answer"] = response.content.strip()
         state["reasoning_steps"].append("Generate Answer")
         return state
 
