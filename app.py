@@ -81,6 +81,34 @@ def web_search(query: str) -> str:
         return f"search_error:{exc}"
 
 # --------------------------------------------------------------------------- #
+#                                HELPER FUNCTIONS                             #
+# --------------------------------------------------------------------------- #
+def _needs_calc(q: str) -> bool:
+    return bool(
+        re.search(r"\b(percent|ratio|average|difference|total)\b", q.lower())
+        or re.search(r"[\+\-\*/]", q)
+    )
+
+
+def _extract_search_terms(question: str) -> str:
+    stops = {
+        "what", "who", "where", "when", "how", "why",
+        "is", "are", "was", "were", "the", "and", "or",
+    }
+    tokens = re.findall(r"[A-Za-z0-9]+", question.lower())
+    key = [tok for tok in tokens if tok not in stops][:6]
+    return " ".join(key)
+
+def _summarize_results(results_json: str, max_hits: int = 3) -> str:
+    """Turn JSON list of hits into a compact text context for the LLM."""
+    try:
+        hits = json.loads(results_json)[:max_hits]
+    except Exception:
+        return ""
+    bullets = [f"- {h['title']}: {h['snippet']}" for h in hits]
+    return "\n".join(bullets)
+
+# --------------------------------------------------------------------------- #
 # -------------------------------  AGENT STATE  ----------------------------- #
 # --------------------------------------------------------------------------- #
 class AgentState(TypedDict):
@@ -95,13 +123,7 @@ class AgentState(TypedDict):
 # -------------------------------  GAIA AGENT  ------------------------------ #
 # --------------------------------------------------------------------------- #
 class GAIAAgent:
-    """
-    LangGraph-powered agent targeting GAIA Level-1 tasks.
-    Key design points:
-      - Compact, cached web results -> lower token cost, less noise.
-      - Safe calculator (no eval foot-gun).
-      - Answer canonicalisation to hit GAIA's exact-match scoring.
-    """
+    """LangGraph-powered agent targeting GAIA Level-1 tasks."""
 
     SYSTEM_PROMPT = (
         "You are an expert question-answering agent. "
@@ -131,89 +153,89 @@ class GAIAAgent:
 
         # Add nodes
         workflow.add_node("analyze_question", self._analyze_question)
-        workflow.add_node("search", self._search_info)
-        workflow.add_node("process", self._process_info)
+        workflow.add_node("search_or_calc", self._search_or_calc)
+        workflow.add_node("process_info", self._process_info)
         workflow.add_node("generate_answer", self._generate_answer)
         workflow.add_node("verify_answer", self._verify_answer)
 
         # Add edges
         workflow.set_entry_point("analyze_question")
-        workflow.add_edge("analyze_question", "search")
-        workflow.add_edge("search", "process")
-        workflow.add_edge("process", "generate_answer")
-        workflow.add_edge("generate_answer", "verify")
-        workflow.add_edge("verify", END)
+        workflow.add_edge("analyze_question", "search_or_calc")
+        workflow.add_edge("search_or_calc", "process_info")
+        workflow.add_edge("process_info", "generate_answer")
+        workflow.add_edge("generate_answer", "verify_answer")
+        workflow.add_edge("verify_answer", END)
 
         return workflow.compile()
 
     # ------------------ NODE IMPLEMENTATIONS ------------------ #
-    def _extract_search_terms(self, question: str) -> str:
-        stops = {
-            "what", "who", "where", "when", "how", "why",
-            "is", "are", "was", "were", "the", "and", "or",
-        }
-        tokens = re.findall(r"[A-Za-z0-9]+", question.lower())
-        key = [tok for tok in tokens if tok not in stops][:6]
-        return " ".join(key)
 
     def _analyse_question(self, state: AgentState) -> AgentState:
         q = state["question"]
         state["reasoning_steps"] = [f"analyse:{q[:60]}…"]
         return state
-    def _search_information(self, state: AgentState) -> AgentState:
-        query = self._extract_search_terms(state["question"])
-        state["reasoning_steps"].append(f"search:{query}")
+
+    def _search_or_calc(self, state: AgentState) -> AgentState:
+        q = state["question"]
+
+        # 1️⃣ Calculator path
+        if _needs_calc(q):
+            expr = re.findall(r"[0-9\.\+\-\*/]+", q)
+            if expr:
+                result = calculator.invoke({"expression": expr[0]})
+
+                state["answer"] = result
+                state["tools_used"].append("calculator")
+                state["reasoning_steps"].append("calc")
+
+                return state  
+        
+        # 2️⃣ Web search path
+        query = _extract_search_terms(q)
         results_json = web_search.invoke({"query": query})
+
         state["search_results"] = results_json
         state["tools_used"].append("web_search")
+        state["reasoning_steps"].append(f"search:{query}")
+
         return state
 
+
+    def _process_info(self, state: AgentState) -> AgentState:
+        if state["answer"]:
+            # If calc already produced an answer, just pass through
+            return state
+
+        # Summarize search results for the LLM
+        state["context"] = _summarize_results(state["search_results"])
+        state["reasoning_steps"].append("process")
+        return state
+    
     def _generate_answer(self, state: AgentState) -> AgentState:
+        if state["answer"]:
+            # calculator already filled it                      
+            return state
+        
         prompt = [
             SystemMessage(content=self.SYSTEM_PROMPT),
             HumanMessage(
                 content=(
-                    f"Question: {state['question']}\n"
-                    f"Search Results (JSON): {state['search_results']}\n"
+                    f"Question: {state['question']}\n\n"
+                    f"Context:\n{state['context']}\n\n"
                     f"Answer:"
                 )
             ),
         ]
         rsp = self.llm(prompt)
         state["answer"] = rsp.content.strip()
-        state["reasoning_steps"].append("synth")
+        state["reasoning_steps"].append("generate answer")
         return state
 
     
-    def _fallback_answer(self, question: str, search_results: str) -> str:
-        """Fallback answer generation without LLM using rule-based reasoning."""
-        if "yes" in question.lower() or "no" in question.lower():
-            return "Yes" if "yes" in search_results.lower() else "No"
-
-        # Extract numbers for numeric questions
-        if any(word in question.lower() for word in ["how many", "count", "number"]):
-            numbers = re.findall(r'\d+', search_results)
-            if numbers:
-                return numbers[0]
-            
-        # Extract years for date questions
-        if "when" in question.lower() or "year" in question.lower():
-            years = re.findall(r'\b(19|20)\d{2}\b', search_results)
-            if years:
-                return years[0]
-
-        # Default: extract first sentence from search results
-        sentences = search_results.split('.')
-        if sentences:
-            return sentences[0].strip()
-        
-        return "Unable to determine answer from available information."
-    
-
     def _verify_answer(self, state: AgentState) -> AgentState:
         ans = state["answer"].strip()
 
-        # Canonicalise numbers (remove commas) / lowercase yes|no
+        # Canonicalize numbers (remove commas) / lowercase yes|no
         if re.fullmatch(r"[0-9][0-9,\.]*", ans):
             ans = ans.replace(",", "")
         if ans.lower() in {"yes", "no"}:
@@ -236,6 +258,7 @@ class GAIAAgent:
                 "question": question,
                 "answer": "",
                 "search_results": "",
+                "context": "",
                 "reasoning_steps": [],
                 "tools_used": []
             }
