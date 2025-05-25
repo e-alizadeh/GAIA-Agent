@@ -116,6 +116,7 @@ class AgentState(TypedDict):
     question: str
     answer: str
     search_results: str 
+    context: str
     reasoning_steps: list[str]
     tools_used: list[str]
 
@@ -173,7 +174,7 @@ class GAIAAgent:
 
     def _analyze_question(self, state: AgentState) -> AgentState:
         q = state["question"]
-        state["reasoning_steps"] = [f"analyse:{q[:60]}…"]
+        state["reasoning_steps"] = [f"Analyze: {q[:60]}"]
         return state
 
     def _search_or_calc(self, state: AgentState) -> AgentState:
@@ -181,15 +182,15 @@ class GAIAAgent:
 
         # 1️⃣ Calculator path
         if _needs_calc(q):
-            expr = re.findall(r"[0-9\.\+\-\*/]+", q)
-            if expr:
-                result = calculator.invoke({"expression": expr[0]})
+            expr = q.strip()         
+            expr = re.sub(r"\s+", "", expr)     # remove spaces
+            result = calculator.invoke({"expression": expr})
 
-                state["answer"] = result
-                state["tools_used"].append("calculator")
-                state["reasoning_steps"].append("calc")
+            state["answer"] = result
+            state["tools_used"].append("calculator")
+            state["reasoning_steps"].append("Calculate")
 
-                return state  
+            return state  
         
         # 2️⃣ Web search path
         query = _extract_search_terms(q)
@@ -209,7 +210,7 @@ class GAIAAgent:
 
         # Summarize search results for the LLM
         state["context"] = _summarize_results(state["search_results"])
-        state["reasoning_steps"].append("process")
+        state["reasoning_steps"].append("Process")
         return state
     
     def _generate_answer(self, state: AgentState) -> AgentState:
@@ -229,7 +230,7 @@ class GAIAAgent:
         ]
         rsp = self.llm.invoke(prompt)
         state["answer"] = rsp.content.strip()
-        state["reasoning_steps"].append("generate answer")
+        state["reasoning_steps"].append("Generate Answer")
         return state
 
     
@@ -251,7 +252,8 @@ class GAIAAgent:
     
     def __call__(self, question: str) -> str:
         """Main agent call method."""
-        print(f"GAIA Agent processing question: {question[:100]}...")
+
+        print(f"GAIA Agent processing question: '{question}'\n")
         
         try:
             initial_state: AgentState = {
