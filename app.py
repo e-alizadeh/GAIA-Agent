@@ -34,7 +34,7 @@ _ALLOWED_OPS = {
 }
 
 def _safe_eval(node: ast.AST) -> float:
-    if isinstance(node, ast.Num):  # literal number
+    if isinstance(node, ast.Constant):  # literal number
         return node.n
     if isinstance(node, ast.UnaryOp) and type(node.op) in _ALLOWED_OPS:
         return _ALLOWED_OPS[type(node.op)](_safe_eval(node.operand))
@@ -59,19 +59,22 @@ def calculator(expression: str) -> str:
 @lru_cache(maxsize=128)
 def _search_duckduckgo(query: str, k: int = 5) -> list[dict]:
     """Returns the top-k DuckDuckGo results as a list of {title, snippet, link}. Caches identical queries."""
-
-    wrapper = DuckDuckGoSearchAPIWrapper(max_results=k)
-    raw = wrapper.results(query)
-    cleaned = []
-    for hit in raw[:k]:
-        cleaned.append(
-            {
-                "title": hit.get("title", "")[:120],
-                "snippet": hit.get("snippet", "")[:200],
-                "link": hit.get("link", "")[:200],
-            }
-        )
-    return cleaned
+    try:
+        wrapper = DuckDuckGoSearchAPIWrapper(max_results=k)
+        raw = wrapper.results(query)
+        cleaned = []
+        for hit in raw[:k]:
+            cleaned.append(
+                {
+                    "title": hit.get("title", "")[:120],
+                    "snippet": hit.get("snippet", "")[:200],
+                    "link": hit.get("link", "")[:200],
+                }
+            )
+        return cleaned
+    except Exception as e:
+        print(f"Search error: {e}")
+        return []
 
 @tool
 def web_search(query: str) -> str:
@@ -85,26 +88,51 @@ def web_search(query: str) -> str:
 #                                HELPER FUNCTIONS                             #
 # --------------------------------------------------------------------------- #
 def _needs_calc(q: str) -> bool:
+    """Check if question is purely mathematical."""
     math_expr = re.compile(r"^\s*[\d\.\s\+\-\*/\(\)]+?\s*$")
     return bool(math_expr.match(q))
 
 
 def _extract_search_terms(question: str) -> str:
+    """Extract key search terms from question."""
     stops = {
         "what", "who", "where", "when", "how", "why",
         "is", "are", "was", "were", "the", "and", "or",
     }
     tokens = re.findall(r"[A-Za-z0-9]+", question.lower())
-    key = [tok for tok in tokens if tok not in stops][:6]
-    return " ".join(key)
+    key_terms = []
+    
+    for tok in tokens:
+        if tok.lower() not in stops or len(tok) > 6:  # Keep longer words even if they're stop words
+            key_terms.append(tok)
+    
+    # Limit to avoid overly long queries
+    return " ".join(key_terms[:8])
+
 
 def _summarize_results(results_json: str, max_hits: int = 3) -> str:
     """Turn JSON list of hits into a compact text context for the LLM."""
     try:
         hits = json.loads(results_json)[:max_hits]
-        return "\n".join(f"- {h['title']}: {h['snippet']}" for h in hits)
-    except Exception:
+        context_parts = []
+        for i, h in enumerate(hits, 1):
+            title = h.get('title', '')
+            snippet = h.get('snippet', '')
+            if title or snippet:
+                context_parts.append(f"{i}. {title}: {snippet}")
+        return "\n".join(context_parts)
+    except Exception as e:
+        print(f"Error summarizing results: {e}")
         return ""
+
+
+def _contains_file_reference(question: str) -> bool:
+    """Check if question references attached files."""
+    file_indicators = [
+        "attached", "attachment", "file", "excel", "spreadsheet", "xls",
+        "csv", "document", "image", "video", "audio", "recording"
+    ]
+    return any(indicator in question.lower() for indicator in file_indicators)
 
 # --------------------------------------------------------------------------- #
 # -------------------------------  AGENT STATE  ----------------------------- #
@@ -124,10 +152,18 @@ class AgentState(TypedDict):
 class GAIAAgent:
     """LangGraph-powered agent targeting GAIA Level-1 tasks."""
 
-    SYSTEM_PROMPT = (
-        "You are an expert answer bot. "
-        "Return ONLY the final answer string—no extra words."
-    )
+    SYSTEM_PROMPT = """You are an expert research assistant that provides accurate, concise answers.
+
+    IMPORTANT INSTRUCTIONS:
+    1. Answer with ONLY the specific information requested - no extra explanation
+    2. For numerical answers, provide just the number
+    3. For names, provide just the name(s)
+    4. For yes/no questions, answer "Yes" or "No"
+    5. Use the provided context carefully to find the exact answer
+    6. If you need to make calculations, show your work briefly
+    7. Be precise and factual
+
+    Return ONLY the final answer."""
 
     def __init__(self):
         try:
