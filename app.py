@@ -13,7 +13,6 @@ from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
 from langchain.agents import tool
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolExecutor
 from langgraph.graph import StateGraph, END
 
 # --- Constants ---
@@ -141,9 +140,8 @@ class GAIAAgent:
             print(f"Warning: Could not initialize OpenAI model: {e}")
             self.llm = None
 
-        # Define tools & executor
+        # Following is defined for book-keeping purposes
         self.tools = [web_search, calculator]
-        self.tool_executor = ToolExecutor(self.tools)
 
         self.graph = self._build_graph()
 
