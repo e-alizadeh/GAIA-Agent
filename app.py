@@ -8,7 +8,6 @@ from typing import Annotated, TypedDict
 import gradio as gr
 from langchain_openai import ChatOpenAI
 import requests
-import pandas as pd
 from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
 from langchain.agents import tool
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
