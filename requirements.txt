@@ -1,2 +1,5 @@
 gradio
 requests
+langgraph
+langchain_openai
+langchain_core
