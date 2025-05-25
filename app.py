@@ -168,7 +168,7 @@ class GAIAAgent:
 
     # ------------------ NODE IMPLEMENTATIONS ------------------ #
 
-    def _analyse_question(self, state: AgentState) -> AgentState:
+    def _analyze_question(self, state: AgentState) -> AgentState:
         q = state["question"]
         state["reasoning_steps"] = [f"analyse:{q[:60]}…"]
         return state
