@@ -4,6 +4,7 @@ import json
 import operator
 import os
 import re
+import pandas as pd
 from typing import Annotated, TypedDict
 import gradio as gr
 from langchain_openai import ChatOpenAI
@@ -158,15 +159,15 @@ class GAIAAgent:
         workflow.add_node("search_or_calc", self._search_or_calc)
         workflow.add_node("process_info", self._process_info)
         workflow.add_node("generate_answer", self._generate_answer)
-        workflow.add_node("verify_answer", self._verify_answer)
+        workflow.add_node("normalize_answer", self._normalize_answer)
 
         # Add edges
         workflow.set_entry_point("analyze_question")
         workflow.add_edge("analyze_question", "search_or_calc")
         workflow.add_edge("search_or_calc", "process_info")
         workflow.add_edge("process_info", "generate_answer")
-        workflow.add_edge("generate_answer", "verify_answer")
-        workflow.add_edge("verify_answer", END)
+        workflow.add_edge("generate_answer", "normalize_answer")
+        workflow.add_edge("normalize_answer", END)
 
         return workflow.compile()
 
@@ -198,7 +199,7 @@ class GAIAAgent:
 
         state["search_results"] = results_json
         state["tools_used"].append("web_search")
-        state["reasoning_steps"].append(f"search:{query}")
+        state["reasoning_steps"].append(f"Search: {query}")
 
         return state
 
@@ -234,7 +235,7 @@ class GAIAAgent:
         return state
 
     
-    def _verify_answer(self, state: AgentState) -> AgentState:
+    def _normalize_answer(self, state: AgentState) -> AgentState:
         ans = state["answer"].strip()
 
         # Canonicalize numbers (remove commas) / lowercase yes|no
