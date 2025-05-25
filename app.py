@@ -227,7 +227,7 @@ class GAIAAgent:
                 )
             ),
         ]
-        rsp = self.llm(prompt)
+        rsp = self.llm.invoke(prompt)
         state["answer"] = rsp.content.strip()
         state["reasoning_steps"].append("generate answer")
         return state
