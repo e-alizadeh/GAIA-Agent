@@ -208,7 +208,7 @@ class GAIAAgent:
 
     def _analyze_question(self, state: AgentState) -> AgentState:
         q = state["question"]
-        state["reasoning_steps"] = [f"Analyze: {q[:60]}"]
+        state["reasoning_steps"] = [f"ANALYZE: {q[:60]}"]
         return state
 
     def _route(self, state: AgentState) -> AgentState:
@@ -228,7 +228,7 @@ class GAIAAgent:
                 result = calculator.invoke({"expression": expr})
                 state["answer"] = result
                 state["tools_used"].append("calculator")
-                state["reasoning_steps"].append(f"calc:{expr}")
+                state["reasoning_steps"].append(f"CALCULATE: {expr}")
                 return state
         
         # 2️⃣ Attachment (Excel file)
@@ -253,7 +253,7 @@ class GAIAAgent:
 
         state["search_results"] = results_json
         state["tools_used"].append("web_search")
-        state["reasoning_steps"].append(f"Search: {query}")
+        state["reasoning_steps"].append(f"SEARCH: {query}")
         state["answer"] = ""
 
         return state
@@ -271,7 +271,7 @@ class GAIAAgent:
             summary = state["search_results"][:4000]  # cap to 4k chars
 
         state["context"] = summary
-        state["reasoning_steps"].append("Process")
+        state["reasoning_steps"].append("PROCESS")
         return state
     
     def _generate_answer(self, state: AgentState) -> AgentState:
@@ -293,7 +293,7 @@ class GAIAAgent:
         response = self.llm.invoke(prompt)
         print(f">>> Raw response from LLM:\n{response}\n\n")
         state["answer"] = response.content.strip()
-        state["reasoning_steps"].append("Generate Answer")
+        state["reasoning_steps"].append("GENERATE ANSWER (LLM)")
         return state
 
     
@@ -319,13 +319,13 @@ class GAIAAgent:
             raw = "No answer found"
 
         state["answer"] = raw
-        state["reasoning_steps"].append("normalize")
+        state["reasoning_steps"].append("NORMALIZE")
         return state
     
     def __call__(self, question: str, task_id: str = "") -> str:
         """Main agent call method."""
-
-        print(f"GAIA Agent processing question: '{question}'\n")
+        print(100*"-")
+        print(f"GAIA Agent processing question: '{question}'")
         
         try:
             initial_state: AgentState = {
@@ -342,7 +342,7 @@ class GAIAAgent:
             final_state = self.graph.invoke(initial_state)
             
             answer = final_state["answer"]
-            print(f"Agent reasoning: {' -> '.join(final_state['reasoning_steps'])}")
+            print(f"Agent reasoning: {' ==> '.join(final_state['reasoning_steps'])}")
             print(f"Tools used: {final_state['tools_used']}")
             print(f"Final answer: {answer}")
             
