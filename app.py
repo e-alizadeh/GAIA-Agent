@@ -16,7 +16,9 @@ from langgraph.graph.message import add_messages
 from langgraph.graph import StateGraph, END
 
 # --- Constants ---
-DEFAULT_API_URL = "https://agents-course-unit4-scoring.hf.space"
+DEFAULT_API_URL: str = "https://agents-course-unit4-scoring.hf.space"
+OPENAI_MODEL_NAME: str = "gpt-4.1-mini-2025-04-14"
+OPENAI_MODEL_TEMPERATURE: str = 0.1
 
 # ----- THIS IS WERE YOU CAN BUILD WHAT YOU WANT ------
 # --------------------------------------------------------------------------- #
@@ -132,10 +134,12 @@ class GAIAAgent:
     def __init__(self):
         try:
             self.llm = ChatOpenAI(
-                model="gpt-3.5-turbo", 
-                temperature=0.1,
+                model=OPENAI_MODEL_NAME, 
+                temperature=OPENAI_MODEL_TEMPERATURE,
                 api_key=os.getenv("OPENAI_API_KEY")
             )
+            print(f"Model name: '{self.llm.model_name}'")
+            print(f"Model temperature: {self.llm.temperature}")
         except Exception as e:
             print(f"Warning: Could not initialize OpenAI model: {e}")
             self.llm = None
