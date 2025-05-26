@@ -1,0 +1,41 @@
+repos:
+# ── FORMATTERS ─────────────────────────────────────────────────────────────
+- repo: https://github.com/astral-sh/ruff-pre-commit
+  rev: v0.11.11
+  hooks:
+    - id: ruff-check
+    - id: ruff-format
+# ── STATIC ANALYSIS ────────────────────────────────────────────────────────
+- repo: https://github.com/pre-commit/mirrors-mypy
+  rev: v1.15.0
+  hooks:
+    - id: mypy
+      additional_dependencies:
+        - "pydantic==1.10.*"
+        - "types-requests"
+        - "mypy-extensions"
+# ── SECRET / KEY DETECTORS ─────────────────────────────────────────────────
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v5.0.0
+  hooks:
+    - id: detect-private-key
+    - id: detect-aws-credentials
+      args: ["--allow-missing-credentials"]
+    - id: detect-private-key
+    - id: check-added-large-files
+    - id: check-ast
+    - id: check-byte-order-marker
+    - id: check-case-conflict
+    - id: check-docstring-first
+    - id: check-executables-have-shebangs
+    - id: check-json
+    - id: debug-statements
+    - id: end-of-file-fixer
+    - id: trailing-whitespace
+    - id: mixed-line-ending
+
+- repo: https://github.com/Yelp/detect-secrets
+  rev: v1.5.0
+  hooks:
+    - id: detect-secrets
+      args: ["--baseline", ".secrets.baseline"]

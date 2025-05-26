@@ -1,0 +1,4 @@
+pre-commit
+ruff
+mypy
+detect-secrets

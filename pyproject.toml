@@ -1,0 +1,50 @@
+# pyproject.toml (trimmed to just tooling – no build backend)
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+lint.select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "C",  # flake8-comprehensions
+    "B",  # flake8-bugbear
+    "UP", # pyupgrade
+]
+lint.ignore = [
+    "E501",  # line too long, handled by black
+    "B008",  # do not perform function calls in argument defaults
+    "C901",  # too complex
+]
+fix = true
+
+[tool.mypy]
+python_version = "3.11"
+disallow_any_generics = true
+disallow_subclassing_any = true
+disallow_untyped_calls = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+implicit_reexport = false
+strict_equality = true
+disable_error_code = [
+  "misc",          # untyped decorator
+  "no-any-return", # allow Any returns temporarily
+  "operator",      # calls on unknown operator types
+]
+plugins = ["pydantic.mypy"]
+
+follow_imports = "silent"
+no_implicit_reexport = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
