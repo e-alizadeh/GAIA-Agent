@@ -319,7 +319,7 @@ class GAIAAgent:
             raw = "No answer found"
 
         state["answer"] = raw
-        state["reasoning_steps"].append("NORMALIZE")
+        state["reasoning_steps"].append("NORMALIZED ANSWER")
         return state
     
     def __call__(self, question: str, task_id: str = "") -> str:
