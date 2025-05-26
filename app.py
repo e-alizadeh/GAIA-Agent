@@ -93,6 +93,7 @@ def web_multi_search(query: str, k: int = 5) -> str:
     try:
         hits = _search_duckduckgo(query, k)
         if hits:
+            print("DuckDuckGo search is used")
             return json.dumps(hits, ensure_ascii=False)
     except Exception:
         pass
@@ -100,6 +101,8 @@ def web_multi_search(query: str, k: int = 5) -> str:
     # Fallback 2: Wikipedia single-article summary
     try:
         page = wiki_summary(query, sentences=2, auto_suggest=False)
+        print("Fallback 2 is used")
+
         return json.dumps([{"title": "Wikipedia", "snippet": page, "link": ""}])
     except Exception:
         pass
@@ -110,6 +113,7 @@ def web_multi_search(query: str, k: int = 5) -> str:
             "https://lite.duckduckgo.com/lite/?q=" + query
         )
         txt = requests.get(url, timeout=10).text[:600]
+        print("Fallback 3 is used")
         return json.dumps(
             [{"title": "Google-lite", "snippet": re.sub(r"<.*?>", "", txt), "link": ""}]
         )
