@@ -6,6 +6,7 @@ import re
 from functools import lru_cache
 from io import BytesIO
 from typing import TypedDict
+from urllib import parse
 
 import gradio as gr
 import pandas as pd
@@ -15,6 +16,8 @@ from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
+from wikipedia import summary as wiki_summary
+from youtube_transcript_api import YouTubeTranscriptApi
 
 # --- Constants ---
 DEFAULT_API_URL: str = "https://agents-course-unit4-scoring.hf.space"
@@ -82,12 +85,51 @@ def _search_duckduckgo(query: str, k: int = 5) -> list[dict[str, str]]:
 
 
 @tool
-def web_search(query: str) -> str:
-    """DuckDuckGo search. Returns compact JSON (max 5 hits)."""
+def web_multi_search(query: str, k: int = 5) -> str:
+    """
+    Multi-backend search. JSON list of {title,snippet,link}.
+    Order: DuckDuckGo → Wikipedia → Google Lite JSON.
+    """
     try:
-        return json.dumps(_search_duckduckgo(query), ensure_ascii=False)
-    except Exception as exc:
-        return f"search_error:{exc}"
+        hits = _search_duckduckgo(query, k)
+        if hits:
+            return json.dumps(hits, ensure_ascii=False)
+    except Exception:
+        pass
+
+    # Fallback 2: Wikipedia single-article summary
+    try:
+        page = wiki_summary(query, sentences=2, auto_suggest=False)
+        return json.dumps([{"title": "Wikipedia", "snippet": page, "link": ""}])
+    except Exception:
+        pass
+
+    # Fallback 3: simple Google (no key) – tiny quota but better than nothing
+    try:
+        url = "https://r.jina.ai/http://api.allorigins.win/raw?url=" + parse.quote(
+            "https://lite.duckduckgo.com/lite/?q=" + query
+        )
+        txt = requests.get(url, timeout=10).text[:600]
+        return json.dumps(
+            [{"title": "Google-lite", "snippet": re.sub(r"<.*?>", "", txt), "link": ""}]
+        )
+    except Exception as e:
+        return f"search_error:{e}"
+
+
+@tool
+def youtube_transcript(url: str, num_first_chars: int = 10_000) -> str:
+    """Returns the YouTube transcript (first `num_first_chars` characters only)."""
+    video_id = re.search(r"v=([A-Za-z0-9_\-]{11})", url)
+    if not video_id:
+        return "yt_error: id"
+    try:
+        txt = " ".join(
+            [x["text"] for x in YouTubeTranscriptApi.get_transcript(video_id.group(1))]
+        )
+        return txt[:num_first_chars]
+    except Exception as e:
+        return f"yt_error: {e}"
 
 
 # --------------------------------------------------------------------------- #
@@ -100,37 +142,18 @@ def _needs_calc(q: str) -> bool:
 
 
 def _extract_search_terms(question: str) -> str:
-    """Extract key search terms from question."""
-    stops = {
-        "what",
-        "who",
-        "where",
-        "when",
-        "how",
-        "why",
-        "is",
-        "are",
-        "was",
-        "were",
-        "the",
-        "and",
-        "or",
-    }
-    tokens = re.findall(r"[A-Za-z0-9]+", question.lower())
-    key_terms = []
-
-    for tok in tokens:
-        if (
-            tok.lower() not in stops or len(tok) > 6
-        ):  # Keep longer words even if they're stop words
-            key_terms.append(tok)
-
-    # Limit to avoid overly long queries
-    return " ".join(key_terms[:8])
+    key = re.findall(r"[A-Za-z0-9']+", question.lower())
+    phrase = " ".join(key)
+    # if we lost critical tokens (length diff > 40 %), fallback to full q
+    return phrase if len(phrase) > 0.6 * len(question) else question
 
 
 def _summarize_results(results_json: str, max_hits: int = 3) -> str:
     """Turn JSON list of hits into a compact text context for the LLM."""
+    if not results_json or not results_json.lstrip().startswith("["):
+        # Not JSON or empty → return raw text
+        return results_json
+
     try:
         hits = json.loads(results_json)[:max_hits]
         context_parts = []
@@ -143,25 +166,6 @@ def _summarize_results(results_json: str, max_hits: int = 3) -> str:
     except Exception as e:
         print(f"Error summarizing results: {e}")
         return ""
-
-
-def _contains_file_reference(question: str) -> bool:
-    """Check if question references attached files."""
-    file_indicators = [
-        "attached",
-        "attachment",
-        "file",
-        "excel",
-        "spreadsheet",
-        "xls",
-        "csv",
-        "document",
-        "image",
-        "video",
-        "audio",
-        "recording",
-    ]
-    return any(indicator in question.lower() for indicator in file_indicators)
 
 
 # --------------------------------------------------------------------------- #
@@ -191,8 +195,7 @@ class GAIAAgent:
     3. For names, provide just the name(s)
     4. For yes/no questions, answer "Yes" or "No"
     5. Use the provided context carefully to find the exact answer
-    6. If you need to make calculations, show your work briefly
-    7. Be precise and factual
+    6. Be precise and factual
 
     Return ONLY the final answer."""
 
@@ -210,7 +213,7 @@ class GAIAAgent:
             self.llm = None
 
         # Following is defined for book-keeping purposes
-        self.tools = [web_search, calculator]
+        self.tools = [web_multi_search, calculator, youtube_transcript]
 
         self.graph = self._build_graph()
 
@@ -243,12 +246,12 @@ class GAIAAgent:
         return state
 
     def _route(self, state: AgentState) -> AgentState:
-        q = state["question"]
+        question = state["question"]
 
         # 1️⃣ Calculator path
-        if _needs_calc(q):
+        if _needs_calc(question):
             # 1) strip all whitespace
-            expr = re.sub(r"\s+", "", q)
+            expr = re.sub(r"\s+", "", question)
 
             # 2) remove ANY character that isn’t digit, dot, operator, or parenthesis
             #    (kills “USD”, “kg”, YouTube IDs, etc.)
@@ -263,7 +266,7 @@ class GAIAAgent:
                 return state
 
         # 2️⃣ Attachment (Excel file)
-        if "attached" in q.lower() and "excel" in q.lower():
+        if "attached" in question.lower() and "excel" in question.lower():
             try:
                 task_id = state.get("task_id")
                 file_url = f"{DEFAULT_API_URL}/files/{task_id}"
@@ -278,18 +281,32 @@ class GAIAAgent:
             except Exception as e:
                 state["reasoning_steps"].append(f"xlsx_error:{e}")
 
-        # 3️⃣ Web search path
-        query = _extract_search_terms(q)
-        results_json = web_search.invoke({"query": query})
+        # 3️⃣ YouTube search path
+        youtube_url = re.search(r"https?://www\.youtube\.com/\S+", question)
+        if youtube_url:
+            transcript = youtube_transcript.invoke({"url": youtube_url.group(0)})
+            state["context"] = transcript
+            state["tools_used"].append("youtube_transcript")
+            state["reasoning_steps"].append("YouTube")
+            return state
+
+        # 4️⃣ Web search path
+        query = _extract_search_terms(question)
+        results_json = web_multi_search.invoke({"query": query})
 
         state["search_results"] = results_json
-        state["tools_used"].append("web_search")
+        state["tools_used"].append("web_multi_search")
         state["reasoning_steps"].append(f"SEARCH: {query}")
         state["answer"] = ""
 
         return state
 
     def _process_info(self, state: AgentState) -> AgentState:
+        if state["context"]:
+            # ✅ If context already populated (e.g. YouTube transcript), keep it.
+            state["reasoning_steps"].append("PROCESS(skip)")
+            return state
+
         if state["answer"]:
             # If calc already produced an answer, just pass through
             state["context"] = ""
@@ -321,7 +338,7 @@ class GAIAAgent:
             ),
         ]
         response = self.llm.invoke(prompt)
-        print(f">>> Raw response from LLM:\n{response}\n\n")
+        print(f">>> Raw response from LLM:\n{response}\n")
         state["answer"] = response.content.strip()
         state["reasoning_steps"].append("GENERATE ANSWER (LLM)")
         return state
@@ -372,6 +389,7 @@ class GAIAAgent:
 
             answer = final_state["answer"]
             print(f"Agent reasoning: {' ==> '.join(final_state['reasoning_steps'])}")
+            print(f"Agent's context {final_state['context']}")
             print(f"Tools used: {final_state['tools_used']}")
             print(f"Final answer: {answer}")
 
