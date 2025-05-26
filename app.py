@@ -124,10 +124,10 @@ def youtube_transcript(url: str, num_first_chars: int = 10_000) -> str:
     if not video_id:
         return "yt_error: id"
     try:
-        txt = " ".join(
-            [x["text"] for x in YouTubeTranscriptApi.get_transcript(video_id.group(1))]
-        )
-        return txt[:num_first_chars]
+        ytt_api = YouTubeTranscriptApi()
+        fetched_transcript = ytt_api.fetch(video_id=video_id.group(1)).to_raw_data()
+        transcript_str = " ".join([x["text"] for x in fetched_transcript])
+        return transcript_str[:num_first_chars]
     except Exception as e:
         return f"yt_error: {e}"
 
@@ -352,8 +352,8 @@ class GAIAAgent:
             raw = num.group(0)
 
         # 2️⃣ Normalize Yes / No
-        if raw.lower().strip(".") in {"yes", "no"}:
-            raw = raw.capitalize()
+        # if raw.lower().strip(".") in {"yes", "no"}:
+        #     raw = raw.capitalize()
 
         # 3️⃣ Remove leading 'User:', 'Answer:', etc.
         raw = re.sub(r"^(User|Answer|Context):\s*", "", raw, flags=re.I)
