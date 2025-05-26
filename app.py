@@ -1,24 +1,25 @@
 import ast
-from functools import lru_cache
-from io import BytesIO
 import json
 import operator
 import os
 import re
-import pandas as pd
+from functools import lru_cache
+from io import BytesIO
 from typing import TypedDict
+
 import gradio as gr
-from langchain_openai import ChatOpenAI
+import pandas as pd
 import requests
-from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
 from langchain.agents import tool
+from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
 from langchain_core.messages import HumanMessage, SystemMessage
-from langgraph.graph import StateGraph, END
+from langchain_openai import ChatOpenAI
+from langgraph.graph import END, StateGraph
 
 # --- Constants ---
 DEFAULT_API_URL: str = "https://agents-course-unit4-scoring.hf.space"
 OPENAI_MODEL_NAME: str = "gpt-4.1-mini-2025-04-14"
-OPENAI_MODEL_TEMPERATURE: str = 0.1
+OPENAI_MODEL_TEMPERATURE: float = 0.1
 
 # ----- THIS IS WERE YOU CAN BUILD WHAT YOU WANT ------
 # --------------------------------------------------------------------------- #
@@ -33,7 +34,8 @@ _ALLOWED_OPS = {
     ast.USub: operator.neg,
 }
 
-def _safe_eval(node: ast.AST) -> float:
+
+def _safe_eval(node: ast.AST) -> int | float | complex:
     if isinstance(node, ast.Constant):  # literal number
         return node.n
     if isinstance(node, ast.UnaryOp) and type(node.op) in _ALLOWED_OPS:
@@ -44,6 +46,7 @@ def _safe_eval(node: ast.AST) -> float:
         )
     raise ValueError("Unsafe or unsupported expression")
 
+
 @tool
 def calculator(expression: str) -> str:
     """Calculate mathematical expressions safely."""
@@ -53,15 +56,16 @@ def calculator(expression: str) -> str:
     except Exception as exc:
         return f"calc_error:{exc}"
 
+
 # --------------------------------------------------------------------------- #
 # -----------------------------     WEB SEARCH    --------------------------- #
 # --------------------------------------------------------------------------- #
 @lru_cache(maxsize=128)
-def _search_duckduckgo(query: str, k: int = 5) -> list[dict]:
+def _search_duckduckgo(query: str, k: int = 5) -> list[dict[str, str]]:
     """Returns the top-k DuckDuckGo results as a list of {title, snippet, link}. Caches identical queries."""
     try:
         wrapper = DuckDuckGoSearchAPIWrapper(max_results=k)
-        raw = wrapper.results(query)
+        raw = wrapper.results(query, max_results=k)
         cleaned = []
         for hit in raw[:k]:
             cleaned.append(
@@ -76,6 +80,7 @@ def _search_duckduckgo(query: str, k: int = 5) -> list[dict]:
         print(f"Search error: {e}")
         return []
 
+
 @tool
 def web_search(query: str) -> str:
     """DuckDuckGo search. Returns compact JSON (max 5 hits)."""
@@ -83,6 +88,7 @@ def web_search(query: str) -> str:
         return json.dumps(_search_duckduckgo(query), ensure_ascii=False)
     except Exception as exc:
         return f"search_error:{exc}"
+
 
 # --------------------------------------------------------------------------- #
 #                                HELPER FUNCTIONS                             #
@@ -96,16 +102,29 @@ def _needs_calc(q: str) -> bool:
 def _extract_search_terms(question: str) -> str:
     """Extract key search terms from question."""
     stops = {
-        "what", "who", "where", "when", "how", "why",
-        "is", "are", "was", "were", "the", "and", "or",
+        "what",
+        "who",
+        "where",
+        "when",
+        "how",
+        "why",
+        "is",
+        "are",
+        "was",
+        "were",
+        "the",
+        "and",
+        "or",
     }
     tokens = re.findall(r"[A-Za-z0-9]+", question.lower())
     key_terms = []
-    
+
     for tok in tokens:
-        if tok.lower() not in stops or len(tok) > 6:  # Keep longer words even if they're stop words
+        if (
+            tok.lower() not in stops or len(tok) > 6
+        ):  # Keep longer words even if they're stop words
             key_terms.append(tok)
-    
+
     # Limit to avoid overly long queries
     return " ".join(key_terms[:8])
 
@@ -116,8 +135,8 @@ def _summarize_results(results_json: str, max_hits: int = 3) -> str:
         hits = json.loads(results_json)[:max_hits]
         context_parts = []
         for i, h in enumerate(hits, 1):
-            title = h.get('title', '')
-            snippet = h.get('snippet', '')
+            title = h.get("title", "")
+            snippet = h.get("snippet", "")
             if title or snippet:
                 context_parts.append(f"{i}. {title}: {snippet}")
         return "\n".join(context_parts)
@@ -129,10 +148,21 @@ def _summarize_results(results_json: str, max_hits: int = 3) -> str:
 def _contains_file_reference(question: str) -> bool:
     """Check if question references attached files."""
     file_indicators = [
-        "attached", "attachment", "file", "excel", "spreadsheet", "xls",
-        "csv", "document", "image", "video", "audio", "recording"
+        "attached",
+        "attachment",
+        "file",
+        "excel",
+        "spreadsheet",
+        "xls",
+        "csv",
+        "document",
+        "image",
+        "video",
+        "audio",
+        "recording",
     ]
     return any(indicator in question.lower() for indicator in file_indicators)
+
 
 # --------------------------------------------------------------------------- #
 # -------------------------------  AGENT STATE  ----------------------------- #
@@ -141,10 +171,11 @@ class AgentState(TypedDict):
     task_id: str
     question: str
     answer: str
-    search_results: str 
+    search_results: str
     context: str
     reasoning_steps: list[str]
     tools_used: list[str]
+
 
 # --------------------------------------------------------------------------- #
 # -------------------------------  GAIA AGENT  ------------------------------ #
@@ -165,12 +196,12 @@ class GAIAAgent:
 
     Return ONLY the final answer."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         try:
             self.llm = ChatOpenAI(
-                model=OPENAI_MODEL_NAME, 
+                model=OPENAI_MODEL_NAME,
                 temperature=OPENAI_MODEL_TEMPERATURE,
-                api_key=os.getenv("OPENAI_API_KEY")
+                api_key=os.getenv("OPENAI_API_KEY"),
             )
             print(f"Model name: '{self.llm.model_name}'")
             print(f"Model temperature: {self.llm.temperature}")
@@ -230,7 +261,7 @@ class GAIAAgent:
                 state["tools_used"].append("calculator")
                 state["reasoning_steps"].append(f"CALCULATE: {expr}")
                 return state
-        
+
         # 2️⃣ Attachment (Excel file)
         if "attached" in q.lower() and "excel" in q.lower():
             try:
@@ -245,8 +276,8 @@ class GAIAAgent:
                 state["reasoning_steps"].append("xlsx")
                 return state
             except Exception as e:
-                state["reasoning_steps"].append(f"xlsx_error:{e}")   
-             
+                state["reasoning_steps"].append(f"xlsx_error:{e}")
+
         # 3️⃣ Web search path
         query = _extract_search_terms(q)
         results_json = web_search.invoke({"query": query})
@@ -257,7 +288,6 @@ class GAIAAgent:
         state["answer"] = ""
 
         return state
-
 
     def _process_info(self, state: AgentState) -> AgentState:
         if state["answer"]:
@@ -273,13 +303,13 @@ class GAIAAgent:
         state["context"] = summary
         state["reasoning_steps"].append("PROCESS")
         return state
-    
+
     def _generate_answer(self, state: AgentState) -> AgentState:
         if state["answer"]:
             # calculator already filled it
-            print("\nCalculator is used ==> No LLM is invoked.\n")                      
+            print("\nCalculator is used ==> No LLM is invoked.\n")
             return state
-        
+
         prompt = [
             SystemMessage(content=self.SYSTEM_PROMPT),
             HumanMessage(
@@ -296,7 +326,6 @@ class GAIAAgent:
         state["reasoning_steps"].append("GENERATE ANSWER (LLM)")
         return state
 
-    
     def _normalize_answer(self, state: AgentState) -> AgentState:
         raw = state["answer"].strip()
 
@@ -321,12 +350,12 @@ class GAIAAgent:
         state["answer"] = raw
         state["reasoning_steps"].append("NORMALIZED ANSWER")
         return state
-    
+
     def __call__(self, question: str, task_id: str = "") -> str:
         """Main agent call method."""
-        print(100*"-")
+        print(100 * "-")
         print(f"GAIA Agent processing question: '{question}'")
-        
+
         try:
             initial_state: AgentState = {
                 "task_id": task_id,
@@ -337,32 +366,34 @@ class GAIAAgent:
                 "reasoning_steps": [],
                 "tools_used": [],
             }
-            
+
             # Run the graph
             final_state = self.graph.invoke(initial_state)
-            
+
             answer = final_state["answer"]
             print(f"Agent reasoning: {' ==> '.join(final_state['reasoning_steps'])}")
             print(f"Tools used: {final_state['tools_used']}")
             print(f"Final answer: {answer}")
-            
+
             return answer
-            
+
         except Exception as e:
             print(f"Error in agent processing: {e}")
             return f"Error processing question: {str(e)}"
 
 
-def run_and_submit_all(profile: gr.OAuthProfile | None):
+def run_and_submit_all(
+    profile: gr.OAuthProfile | None,
+) -> tuple[str, pd.DataFrame | None]:
     """
     Fetches all questions, runs the BasicAgent on them, submits all answers,
     and displays the results.
     """
     # --- Determine HF Space Runtime URL and Repo URL ---
-    space_id = os.getenv("SPACE_ID") # Get the SPACE_ID for sending link to the code
+    space_id = os.getenv("SPACE_ID")  # Get the SPACE_ID for sending link to the code
 
     if profile:
-        username= f"{profile.username}"
+        username = f"{profile.username}"
         print(f"User logged in: {username}")
     else:
         print("User not logged in.")
@@ -390,16 +421,16 @@ def run_and_submit_all(profile: gr.OAuthProfile | None):
         response.raise_for_status()
         questions_data = response.json()
         if not questions_data:
-             print("Fetched questions list is empty.")
-             return "Fetched questions list is empty or invalid format.", None
+            print("Fetched questions list is empty.")
+            return "Fetched questions list is empty or invalid format.", None
         print(f"Fetched {len(questions_data)} questions.")
     except requests.exceptions.RequestException as e:
         print(f"Error fetching questions: {e}")
         return f"Error fetching questions: {e}", None
     except requests.exceptions.JSONDecodeError as e:
-         print(f"Error decoding JSON response from questions endpoint: {e}")
-         print(f"Response text: {response.text[:500]}")
-         return f"Error decoding server response for questions: {e}", None
+        print(f"Error decoding JSON response from questions endpoint: {e}")
+        print(f"Response text: {response.text[:500]}")
+        return f"Error decoding server response for questions: {e}", None
     except Exception as e:
         print(f"An unexpected error occurred fetching questions: {e}")
         return f"An unexpected error occurred fetching questions: {e}", None
@@ -416,18 +447,36 @@ def run_and_submit_all(profile: gr.OAuthProfile | None):
             continue
         try:
             submitted_answer = agent(question=question_text, task_id=task_id)
-            answers_payload.append({"task_id": task_id, "submitted_answer": submitted_answer})
-            results_log.append({"Task ID": task_id, "Question": question_text, "Submitted Answer": submitted_answer})
+            answers_payload.append(
+                {"task_id": task_id, "submitted_answer": submitted_answer}
+            )
+            results_log.append(
+                {
+                    "Task ID": task_id,
+                    "Question": question_text,
+                    "Submitted Answer": submitted_answer,
+                }
+            )
         except Exception as e:
-             print(f"Error running agent on task {task_id}: {e}")
-             results_log.append({"Task ID": task_id, "Question": question_text, "Submitted Answer": f"AGENT ERROR: {e}"})
+            print(f"Error running agent on task {task_id}: {e}")
+            results_log.append(
+                {
+                    "Task ID": task_id,
+                    "Question": question_text,
+                    "Submitted Answer": f"AGENT ERROR: {e}",
+                }
+            )
 
     if not answers_payload:
         print("Agent did not produce any answers to submit.")
         return "Agent did not produce any answers to submit.", pd.DataFrame(results_log)
 
-    # 4. Prepare Submission 
-    submission_data = {"username": username.strip(), "agent_code": agent_code, "answers": answers_payload}
+    # 4. Prepare Submission
+    submission_data = {
+        "username": username.strip(),
+        "agent_code": agent_code,
+        "answers": answers_payload,
+    }
     status_update = f"Agent finished. Submitting {len(answers_payload)} answers for user '{username}'..."
     print(status_update)
 
@@ -497,20 +546,19 @@ with gr.Blocks() as demo:
 
     run_button = gr.Button("Run Evaluation & Submit All Answers")
 
-    status_output = gr.Textbox(label="Run Status / Submission Result", lines=5, interactive=False)
+    status_output = gr.Textbox(
+        label="Run Status / Submission Result", lines=5, interactive=False
+    )
     # Removed max_rows=10 from DataFrame constructor
     results_table = gr.DataFrame(label="Questions and Agent Answers", wrap=True)
 
-    run_button.click(
-        fn=run_and_submit_all,
-        outputs=[status_output, results_table]
-    )
+    run_button.click(fn=run_and_submit_all, outputs=[status_output, results_table])
 
 if __name__ == "__main__":
-    print("\n" + "-"*30 + " App Starting " + "-"*30)
+    print("\n" + "-" * 30 + " App Starting " + "-" * 30)
     # Check for SPACE_HOST and SPACE_ID at startup for information
     space_host_startup = os.getenv("SPACE_HOST")
-    space_id_startup = os.getenv("SPACE_ID") # Get SPACE_ID at startup
+    space_id_startup = os.getenv("SPACE_ID")  # Get SPACE_ID at startup
 
     if space_host_startup:
         print(f"✅ SPACE_HOST found: {space_host_startup}")
@@ -518,14 +566,18 @@ if __name__ == "__main__":
     else:
         print("ℹ️  SPACE_HOST environment variable not found (running locally?).")
 
-    if space_id_startup: # Print repo URLs if SPACE_ID is found
+    if space_id_startup:  # Print repo URLs if SPACE_ID is found
         print(f"✅ SPACE_ID found: {space_id_startup}")
         print(f"   Repo URL: https://huggingface.co/spaces/{space_id_startup}")
-        print(f"   Repo Tree URL: https://huggingface.co/spaces/{space_id_startup}/tree/main")
+        print(
+            f"   Repo Tree URL: https://huggingface.co/spaces/{space_id_startup}/tree/main"
+        )
     else:
-        print("ℹ️  SPACE_ID environment variable not found (running locally?). Repo URL cannot be determined.")
+        print(
+            "ℹ️  SPACE_ID environment variable not found (running locally?). Repo URL cannot be determined."
+        )
 
-    print("-"*(60 + len(" App Starting ")) + "\n")
+    print("-" * (60 + len(" App Starting ")) + "\n")
 
     print("Launching Gradio Interface for Basic Agent Evaluation...")
     demo.launch(debug=True, share=False)
