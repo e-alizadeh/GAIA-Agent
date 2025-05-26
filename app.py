@@ -208,7 +208,7 @@ class GAIAAgent:
 
     def _analyze_question(self, state: AgentState) -> AgentState:
         q = state["question"]
-        state["reasoning_steps"] = [f"ANALYZE: {q[:60]}"]
+        state["reasoning_steps"] = [f"ANALYZE: {q}"]
         return state
 
     def _route(self, state: AgentState) -> AgentState:
