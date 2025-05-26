@@ -1,8 +1,9 @@
 gradio
 requests
-langgraph
-langchain_openai
-langchain_core
-langchain
-langchain_community
-pandas
+langgraph==0.4.7
+langchain_openai==0.3.18
+langchain_core==0.3.61
+langchain==0.3.25
+langchain_community==0.3.24
+pandas==2.2.3
+duckduckgo-search==8.0.2
