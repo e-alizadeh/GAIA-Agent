@@ -165,11 +165,6 @@ def vision_task(img_bytes: bytes, question: str) -> str:
     Pass the user's question AND the referenced image to a multimodal LLM and
     return its first line of text as the answer.  No domain assumptions made.
     """
-    sys_prompt = (
-        "You are a terse assistant. Respond with ONLY the answer to the user's "
-        "question—no explanations, no punctuation except what the answer itself "
-        "requires. If the answer is a chess move, output it in algebraic notation."
-    )
     vision_llm = ChatOpenAI(
         model="gpt-4o-mini",  # set OPENAI_API_KEY in env
         temperature=0,
@@ -178,7 +173,7 @@ def vision_task(img_bytes: bytes, question: str) -> str:
     try:
         b64 = b64encode(img_bytes).decode()
         messages = [
-            SystemMessage(content=sys_prompt),
+            SystemMessage(content=get_prompt(prompt_key="vision_system")),
             HumanMessage(
                 content=[
                     {"type": "text", "text": question.strip()},
@@ -215,10 +210,10 @@ def run_py(code: str) -> str:
 
 
 @tool
-def transcribe_via_whisper(mp3_bytes: bytes) -> str:
-    """Transcribe MP3 bytes with Whisper (CPU)."""
+def transcribe_via_whisper(audio_bytes: bytes) -> str:
+    """Transcribe audio with Whisper (CPU)."""
     with NamedTemporaryFile(suffix=".mp3", delete=False) as f:
-        f.write(mp3_bytes)
+        f.write(audio_bytes)
         path = f.name
     try:
         import whisper  # openai-whisper
@@ -236,7 +231,6 @@ def analyze_excel_file(xls_bytes: bytes, question: str) -> str:
     "Analyze Excel or CSV file by passing the data preview to LLM and getting the Python Pandas operation to run"
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, max_tokens=64)
 
-    # 1. full dataframe
     try:
         df = pd.read_excel(BytesIO(xls_bytes))
     except Exception:
@@ -245,18 +239,19 @@ def analyze_excel_file(xls_bytes: bytes, question: str) -> str:
     for col in df.select_dtypes(include="number").columns:
         df[col] = df[col].astype(float)
 
-    # 2. ask the LLM for a single expression
+    # Ask the LLM for a single expression
     prompt = get_prompt(
-        prompt_key="excel_analysis_one_liner", preview=df.head(5).to_dict(orient="list")
+        prompt_key="excel_system",
+        question=question,
+        preview=df.head(5).to_dict(orient="list"),
     )
     expr = llm.invoke(prompt).content.strip()
 
-    # 3. run it on the FULL df
+    # Run generated Pandas' one-line expression
     try:
         result = eval(expr, {"df": df, "pd": pd, "__builtins__": {}})
-        # ── normalize scalars to string -------------------------------------------
+        # Normalize scalars to string
         if isinstance(result, np.generic):
-            # keep existing LLM formatting (e.g. {:.2f}) if it's already a str
             result = float(result)  # → plain Python float
             return f"{result:.2f}"  # or str(result) if no decimals needed
 
