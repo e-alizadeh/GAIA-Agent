@@ -1,6 +1,6 @@
 import os
 import re
-from typing import Literal, TypedDict
+from typing import Literal, TypedDict, get_args
 
 import gradio as gr
 import pandas as pd
@@ -10,8 +10,11 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 
 from tools import (
+    analyze_excel_file,
     calculator,
     image_describe,
+    run_py,
+    transcribe_via_whisper,
     web_multi_search,
     wiki_search,
     youtube_transcript,
@@ -33,7 +36,7 @@ If the answer is numeric, output digits only (no commas, units, or words).
 #                           QUESTION  CLASSIFIER                               #
 # --------------------------------------------------------------------------- #
 
-_LABELS = {"math", "youtube", "image", "general"}
+_LABELS = Literal["math", "youtube", "image", "code", "excel", "audio", "general"]
 
 _CLASSIFY_PROMPT = """You are a router that labels the user question with exactly one of the following categories:
 {labels}.
@@ -50,7 +53,7 @@ Label:
 # --------------------------------------------------------------------------- #
 class AgentState(TypedDict):
     question: str
-    label: Literal["math", "youtube", "image", "general"]
+    label: _LABELS
     context: str
     answer: str
     confidence: float
@@ -68,9 +71,12 @@ _llm_answer = ChatOpenAI(model=MODEL_NAME)
 def classify(state: AgentState) -> AgentState:  # noqa: D401
     """Label the task so we know which toolchain to invoke."""
     question = state["question"]
+
+    values = get_args(_LABELS)  # -> ("math", "youtube", ...)
+    parsed_labels = ", ".join(repr(v) for v in values)
     resp = (
         _llm_router.invoke(
-            _CLASSIFY_PROMPT.format(question=question, labels=", ".join(_LABELS))
+            _CLASSIFY_PROMPT.format(question=question, labels=parsed_labels)
         )
         .content.strip()
         .lower()
@@ -80,10 +86,35 @@ def classify(state: AgentState) -> AgentState:  # noqa: D401
 
 
 def gather_context(state: AgentState) -> AgentState:
-    question, label = state["question"], state["label"]
+    question, label, task_id = state["question"], state["label"], state["task_id"]
 
     matched_pattern = r"https?://\S+"
     matched_obj = re.search(matched_pattern, question)
+
+    # ---- attachment detection ------------------------------------------------
+    if task_id:
+        file_url = f"{DEFAULT_API_URL}/files/{task_id}"
+        head = requests.head(file_url, timeout=10)
+        ctype = head.headers.get("content-type", "")
+
+        print(f"[DEBUG] attachment type={ctype} | url={file_url}")
+        if "python" in ctype or file_url.endswith(".py"):
+            code = requests.get(file_url, timeout=10).text
+            state["answer"] = run_py.invoke({"code": code})
+            state["label"] = "code"
+            return state
+        if "excel" in ctype or file_url.endswith((".xlsx", ".csv")):
+            blob = requests.get(file_url, timeout=10).content
+            state["context"] = analyze_excel_file.invoke(
+                {"xls_bytes": blob, "question": question}
+            )
+            state["label"] = "excel"
+            return state
+        if "audio" in ctype or file_url.endswith(".mp3"):
+            blob = requests.get(file_url, timeout=10).content
+            state["context"] = transcribe_via_whisper.invoke({"mp3_bytes": blob})
+            state["label"] = "audio"
+            return state
 
     if label == "math":
         print("[TOOL] calculator")
@@ -109,9 +140,8 @@ def gather_context(state: AgentState) -> AgentState:
 
 
 def generate_answer(state: AgentState) -> AgentState:
-    # Deterministic calculator path
-    if state["label"] == "math":
-        state["answer"] = state["context"].strip()
+    # Skip LLM for deterministic labels
+    if state["label"] in {"math", "code", "excel"}:
         state["confidence"] = 0.9
         return state
 

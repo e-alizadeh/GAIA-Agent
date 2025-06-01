@@ -2,8 +2,10 @@ import ast
 import json
 import operator
 import re
+import subprocess
 from functools import lru_cache
 from io import BytesIO
+from tempfile import NamedTemporaryFile
 
 import requests
 from langchain_community.document_loaders import WikipediaLoader
@@ -46,7 +48,7 @@ def calculator(expression: str) -> str:
         tree = ast.parse(expression, mode="eval")
         value = _safe_eval(tree.body)
         return str(value)
-    except Exception as exc:  # pragma: no cover – we surface errors to the agent
+    except Exception as exc:
         return f"calc_error:{exc}"
 
 
@@ -62,9 +64,9 @@ def _ddg_search(query: str, k: int = 6) -> list[dict[str, str]]:
     hits = wrapper.results(query)
     return [
         {
-            "title": hit.get("title", "")[:120],
-            "snippet": hit.get("snippet", "")[:300],
-            "link": hit.get("link", "")[:200],
+            "title": hit.get("title", "")[:500],
+            "snippet": hit.get("snippet", "")[:750],
+            "link": hit.get("link", "")[:300],
         }
         for hit in hits[:k]
     ]
@@ -87,9 +89,9 @@ def web_multi_search(query: str, k: int = 6) -> str:
         )
         formatted = [
             {
-                "title": d.metadata.get("title", "")[:120],
-                "snippet": d.page_content[:300],
-                "link": d.metadata.get("source", "")[:200],
+                "title": d.metadata.get("title", "")[:500],
+                "snippet": d.page_content[:750],
+                "link": d.metadata.get("source", "")[:300],
             }
             for d in tavily_hits
         ]
@@ -156,16 +158,61 @@ def image_describe(image_url: str, top_k: int = 3) -> str:
 
 
 @tool
-def csv_sum(url: str, column: str) -> str:
-    """Download a CSV and return the sum of the specified numeric column."""
+def run_py(code: str) -> str:
+    """Execute Python code in a sandboxed subprocess and return last stdout line."""
     try:
-        import pandas as pd  # local import to avoid mandatory pandas if unused
-
-        df = pd.read_csv(url)
-        total = df[column].sum()
-        return str(total)
+        with NamedTemporaryFile(delete=False, suffix=".py", mode="w") as f:
+            f.write(code)
+            path = f.name
+        proc = subprocess.run(
+            ["python", path], capture_output=True, text=True, timeout=4
+        )
+        out = proc.stdout.strip().splitlines()
+        return out[-1] if out else ""
     except Exception as exc:
-        return f"csv_error:{exc}"
+        return f"py_error:{exc}"
+
+
+@tool
+def transcribe_via_whisper(mp3_bytes: bytes) -> str:
+    """Transcribe MP3 bytes with Whisper (CPU)."""
+    with NamedTemporaryFile(suffix=".mp3", delete=False) as f:
+        f.write(mp3_bytes)
+        path = f.name
+    try:
+        import whisper  # openai-whisper
+
+        model = whisper.load_model("base")
+        output = model.transcribe(path)["text"].strip()
+        print(f"[DEBUG] Whisper transcript (first 200 chars): {output[:200]}")
+        return output
+    except Exception as exc:
+        return f"asr_error:{exc}"
+
+
+@tool
+def analyze_excel_file(xls_bytes: bytes, question: str) -> str:
+    """Generic Excel/CSV aggregation handler."""
+    import pandas as pd
+
+    # Try both Excel and CSV loaders
+    try:
+        df = pd.read_excel(BytesIO(xls_bytes))
+    except Exception:
+        df = pd.read_csv(BytesIO(xls_bytes))
+
+    numeric = df.select_dtypes("number")
+    if numeric.empty:
+        return "No numeric data"
+
+    q = question.lower()
+    if any(term in q for term in ["total", "sum", "aggregate"]):
+        return f"{numeric.sum().sum():.2f}"
+    if any(term in q for term in ["average", "mean"]):
+        return f"{numeric.mean().mean():.2f}"
+
+    # Fallback: return first 10 rows as csv for LLM to reason on
+    return df.head(10).to_csv(index=False)
 
 
 __all__ = [
@@ -174,5 +221,7 @@ __all__ = [
     "wiki_search",
     "youtube_transcript",
     "image_describe",
-    "csv_sum",
+    "run_py",
+    "transcribe_via_whisper",
+    "analyze_excel_file",
 ]
