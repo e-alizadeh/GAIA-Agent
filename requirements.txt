@@ -20,7 +20,7 @@ wikipedia==1.4.0                  # WikipediaLoader
 youtube-transcript-api==1.0.3  # YouTube transcripts
 openpyxl==3.1.5                # Excel parsing when GAIA attaches .xlsx
 Pillow>=10.2.0                 # image handling for transformers
-openai-whisper=20240930
+openai-whisper==20240930
 
 # ── Lightweight vision model
 transformers>=4.41.2
