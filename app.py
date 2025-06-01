@@ -9,12 +9,13 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 
+from helpers import fetch_task_file, sniff_excel_type
 from tools import (
     analyze_excel_file,
     calculator,
-    image_describe,
     run_py,
     transcribe_via_whisper,
+    vision_task,
     web_multi_search,
     wiki_search,
     youtube_transcript,
@@ -36,15 +37,46 @@ If the answer is numeric, output digits only (no commas, units, or words).
 #                           QUESTION  CLASSIFIER                               #
 # --------------------------------------------------------------------------- #
 
-_LABELS = Literal["math", "youtube", "image", "code", "excel", "audio", "general"]
+_LABELS = Literal[
+    "math",
+    "youtube",
+    "image_generic",
+    "image_puzzle",
+    "code",
+    "excel",
+    "audio",
+    "general",
+]
 
-_CLASSIFY_PROMPT = """You are a router that labels the user question with exactly one of the following categories:
-{labels}.
+_CLASSIFY_PROMPT = """You are a *routing* assistant.
+Your ONLY job is to print **one** of the allowed labels - nothing else.
 
+Allowed labels
+==============
+{labels}
+
+Guidelines
+----------
+• **math**: the question is a pure arithmetic/numeric expression.
+• **youtube**: the question contains a YouTube URL and asks about its content.
+• **code**: the task references attached Python code; caller wants its output.
+• **excel**: the task references an attached .xlsx/.xls/.csv and asks for a sum, average, etc.
+• **audio**: the task references an attached audio file and asks for its transcript or facts in it.
+• **image_generic**: the question asks only *what* is in the picture (e.g. “Which animal is shown?”).
+• **image_puzzle**: the question asks for a *move, count, coordinate,* or other board-game tactic that needs an exact piece layout (e.g. "What is Black's winning move?").
+• **general**: anything else (fallback).
+
+Example for the two image labels
+--------------------------------
+1. "Identify the landmark in this photo." --> **image_generic**
+2. "It's Black to move in the attached chess position; give the winning line." --> **image_puzzle**
+
+~~~
 User question:
 {question}
+~~~
 
-Label:
+IMPORTANT: Respond with **one label exactly**, no punctuation, no explanation.
 """
 
 
@@ -56,7 +88,6 @@ class AgentState(TypedDict):
     label: str
     context: str
     answer: str
-    confidence: float
     task_id: str | None = None
 
 
@@ -93,28 +124,49 @@ def gather_context(state: AgentState) -> AgentState:
 
     # ---- attachment detection ------------------------------------------------
     if task_id:
-        file_url = f"{DEFAULT_API_URL}/files/{task_id}"
-        head = requests.head(file_url, timeout=10)
-        ctype = head.headers.get("content-type", "")
+        blob, ctype = fetch_task_file(api_url=DEFAULT_API_URL, task_id=task_id)
 
-        print(f"[DEBUG] attachment type={ctype} | url={file_url}")
-        if "python" in ctype or file_url.endswith(".py"):
-            code = requests.get(file_url, timeout=10).text
-            state["answer"] = run_py.invoke({"code": code})
-            state["label"] = "code"
-            return state
-        if "excel" in ctype or file_url.endswith((".xlsx", ".csv")):
-            blob = requests.get(file_url, timeout=10).content
-            state["context"] = analyze_excel_file.invoke(
-                {"xls_bytes": blob, "question": question}
-            )
-            state["label"] = "excel"
-            return state
-        if "audio" in ctype or file_url.endswith(".mp3"):
-            blob = requests.get(file_url, timeout=10).content
-            state["context"] = transcribe_via_whisper.invoke({"mp3_bytes": blob})
-            state["label"] = "audio"
-            return state
+        if any([blob, ctype]):
+            print(f"[DEBUG] attachment type={ctype} ")
+            # ── Python code ------------------------------------------------------
+            if "python" in ctype:
+                print("[DEBUG] Working with a Python attachment file")
+                state["answer"] = run_py.invoke({"code": blob.decode("utf-8")})
+                state["label"] = "code"
+                return state
+
+            # ── Excel / CSV ------------------------------------------------------
+            # 1) Header hints
+            header_says_sheet = any(key in ctype for key in ("excel", "sheet", "csv"))
+            # 2) Magic-number sniff (works when ctype is application/octet-stream)
+            blob_says_sheet = sniff_excel_type(blob) in {"xlsx", "xls", "csv"}
+
+            if header_says_sheet or blob_says_sheet:
+                if blob_says_sheet:
+                    print(f"[DEBUG] octet-stream sniffed as {sniff_excel_type(blob)}")
+
+                print("[DEBUG] Working with a Excel/CSV attachment file")
+                state["context"] = analyze_excel_file.invoke(
+                    {"xls_bytes": blob, "question": question}
+                )
+                state["label"] = "excel"
+                return state
+
+            # ── Audio --------------------------------------------------------
+            if "audio" in ctype:
+                print("[DEBUG] Working with an audio attachment file")
+                state["context"] = transcribe_via_whisper.invoke({"mp3_bytes": blob})
+                state["label"] = "audio"
+                return state
+
+            # ── Image --------------------------------------------------------
+            if "image" in ctype:
+                print("[DEBUG] Working with an image attachment file")
+                state["context"] = vision_task.invoke(
+                    {"img_bytes": blob, "question": question}
+                )
+                state["label"] = "image"
+                return state
 
     if label == "math":
         print("[TOOL] calculator")
@@ -125,11 +177,6 @@ def gather_context(state: AgentState) -> AgentState:
         if matched_obj:
             url = matched_obj[0]
             state["context"] = youtube_transcript.invoke({"url": url})
-    elif label == "image" and matched_obj:
-        print("[TOOL] image")
-        if matched_obj:
-            url = matched_obj[0]
-            state["context"] = image_describe.invoke({"image_url": url})
     else:  # general
         print("[TOOL] general")
         search_json = web_multi_search.invoke({"query": question})
@@ -142,7 +189,6 @@ def gather_context(state: AgentState) -> AgentState:
 def generate_answer(state: AgentState) -> AgentState:
     # Skip LLM for deterministic labels
     if state["label"] in {"math", "code", "excel"}:
-        state["confidence"] = 0.9
         return state
 
     prompt = [
@@ -153,23 +199,17 @@ def generate_answer(state: AgentState) -> AgentState:
     ]
     raw = _llm_answer.invoke(prompt).content.strip()
     state["answer"] = raw
-    state["confidence"] = 0.5
     return state
 
 
 def validate(state: AgentState) -> AgentState:
-    """Simple format + confidence gate."""
     txt = re.sub(r"^(final answer:?\s*)", "", state["answer"], flags=re.I).strip()
 
     # If question demands a single token (first name / one word), enforce it
     if any(kw in state["question"].lower() for kw in ["first name", "single word"]):
         txt = txt.split(" ")[0]
 
-    txt = txt.rstrip(".")
-    if not txt or len(txt.split()) > 6 or state["confidence"] < 0.2:
-        txt = "I don’t know"
-
-    state["answer"] = txt
+    state["answer"] = txt.rstrip(".")
     return state
 
 
@@ -210,7 +250,6 @@ class GAIAAgent:
             "label": "general",
             "context": "",
             "answer": "",
-            "confidence": 0.0,
             "task_id": task_id,
         }
         final = self.graph.invoke(state)
