@@ -9,7 +9,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 
-from helpers import fetch_task_file, sniff_excel_type
+from helpers import fetch_task_file, get_prompt, sniff_excel_type
 from tools import (
     analyze_excel_file,
     calculator,
@@ -28,11 +28,6 @@ DEFAULT_API_URL: str = "https://agents-course-unit4-scoring.hf.space"
 MODEL_NAME: str = "o4-mini"  # "gpt-4.1-mini"
 TEMPERATURE: float = 0.1
 
-_SYSTEM_PROMPT = """You are a precise research assistant. Return ONLY the literal answer - no preamble.
-If the question asks for a *first name*, output the first given name only.
-If the answer is numeric, output digits only (no commas, units, or words).
-"""
-
 # --------------------------------------------------------------------------- #
 #                           QUESTION  CLASSIFIER                               #
 # --------------------------------------------------------------------------- #
@@ -40,44 +35,12 @@ If the answer is numeric, output digits only (no commas, units, or words).
 _LABELS = Literal[
     "math",
     "youtube",
-    "image_generic",
-    "image_puzzle",
+    "image",
     "code",
     "excel",
     "audio",
     "general",
 ]
-
-_CLASSIFY_PROMPT = """You are a *routing* assistant.
-Your ONLY job is to print **one** of the allowed labels - nothing else.
-
-Allowed labels
-==============
-{labels}
-
-Guidelines
-----------
-• **math**: the question is a pure arithmetic/numeric expression.
-• **youtube**: the question contains a YouTube URL and asks about its content.
-• **code**: the task references attached Python code; caller wants its output.
-• **excel**: the task references an attached .xlsx/.xls/.csv and asks for a sum, average, etc.
-• **audio**: the task references an attached audio file and asks for its transcript or facts in it.
-• **image_generic**: the question asks only *what* is in the picture (e.g. “Which animal is shown?”).
-• **image_puzzle**: the question asks for a *move, count, coordinate,* or other board-game tactic that needs an exact piece layout (e.g. "What is Black's winning move?").
-• **general**: anything else (fallback).
-
-Example for the two image labels
---------------------------------
-1. "Identify the landmark in this photo." --> **image_generic**
-2. "It's Black to move in the attached chess position; give the winning line." --> **image_puzzle**
-
-~~~
-User question:
-{question}
-~~~
-
-IMPORTANT: Respond with **one label exactly**, no punctuation, no explanation.
-"""
 
 
 # --------------------------------------------------------------------------- #
@@ -104,14 +67,12 @@ def classify(state: AgentState) -> AgentState:  # noqa: D401
     question = state["question"]
 
     label_values = set(get_args(_LABELS))  # -> ("math", "youtube", ...)
-    parsed_labels = ", ".join(repr(v) for v in label_values)
-    resp = (
-        _llm_router.invoke(
-            _CLASSIFY_PROMPT.format(question=question, labels=parsed_labels)
-        )
-        .content.strip()
-        .lower()
+    prompt = get_prompt(
+        prompt_key="router",
+        question=question,
+        labels=", ".join(repr(v) for v in label_values),
     )
+    resp = _llm_router.invoke(prompt).content.strip().lower()
     state["label"] = resp if resp in label_values else "general"
     return state
 
@@ -146,7 +107,7 @@ def gather_context(state: AgentState) -> AgentState:
                     print(f"[DEBUG] octet-stream sniffed as {sniff_excel_type(blob)}")
 
                 print("[DEBUG] Working with a Excel/CSV attachment file")
-                state["context"] = analyze_excel_file.invoke(
+                state["answer"] = analyze_excel_file.invoke(
                     {"xls_bytes": blob, "question": question}
                 )
                 state["label"] = "excel"
@@ -162,7 +123,7 @@ def gather_context(state: AgentState) -> AgentState:
             # ── Image --------------------------------------------------------
             if "image" in ctype:
                 print("[DEBUG] Working with an image attachment file")
-                state["context"] = vision_task.invoke(
+                state["answer"] = vision_task.invoke(
                     {"img_bytes": blob, "question": question}
                 )
                 state["label"] = "image"
@@ -187,14 +148,18 @@ def gather_context(state: AgentState) -> AgentState:
 
 
 def generate_answer(state: AgentState) -> AgentState:
-    # Skip LLM for deterministic labels
-    if state["label"] in {"math", "code", "excel"}:
+    # Skip LLM for deterministic labels or tasks that already used LLMs
+    if state["label"] in {"code", "excel", "image", "math"}:
         return state
 
     prompt = [
-        SystemMessage(content=_SYSTEM_PROMPT),
+        SystemMessage(content=get_prompt("final_llm_system")),
         HumanMessage(
-            content=f"Question: {state['question']}\n\nContext:\n{state['context']}\n\nAnswer:"
+            content=get_prompt(
+                prompt_key="final_llm_user",
+                question=state["question"],
+                context=state["context"],
+            )
         ),
     ]
     raw = _llm_answer.invoke(prompt).content.strip()
