@@ -53,7 +53,7 @@ Label:
 # --------------------------------------------------------------------------- #
 class AgentState(TypedDict):
     question: str
-    label: _LABELS
+    label: str
     context: str
     answer: str
     confidence: float
