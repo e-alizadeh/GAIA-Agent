@@ -8,14 +8,17 @@ from functools import lru_cache
 from io import BytesIO
 from tempfile import NamedTemporaryFile
 
+import numpy as np
+import pandas as pd
 from langchain_community.document_loaders import WikipediaLoader
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
-from transformers import pipeline
 from youtube_transcript_api import YouTubeTranscriptApi
+
+from helpers import get_prompt
 
 # --------------------------------------------------------------------------- #
 #                       ARITHMETIC (SAFE CALCULATOR)                         #
@@ -57,8 +60,6 @@ def calculator(expression: str) -> str:
 # --------------------------------------------------------------------------- #
 #                             WEB  &  WIKI  SEARCH                           #
 # --------------------------------------------------------------------------- #
-
-
 @lru_cache(maxsize=256)
 def _ddg_search(query: str, k: int = 6) -> list[dict[str, str]]:
     """Cached DuckDuckGo JSON search."""
@@ -114,8 +115,6 @@ def wiki_search(query: str, max_pages: int = 2) -> str:
 # --------------------------------------------------------------------------- #
 #                               YOUTUBE  TRANSCRIPT                          #
 # --------------------------------------------------------------------------- #
-
-
 @tool
 def youtube_transcript(url: str, chars: int = 10_000) -> str:
     """Fetch full YouTube transcript (first *chars* characters)."""
@@ -137,10 +136,9 @@ def youtube_transcript(url: str, chars: int = 10_000) -> str:
 # Instantiate a lightweight CLIP‑based zero‑shot image classifier (runs on CPU)
 ### The model 'openai/clip-vit-base-patch32' is a vision transformer (ViT) model trained as part of OpenAI’s CLIP project.
 ### It performs zero-shot image classification by mapping images and labels into the same embedding space.
-_image_pipe = pipeline(
-    "image-classification", model="openai/clip-vit-base-patch32", device="cpu"
-)
-
+# _image_pipe = pipeline(
+#     "image-classification", model="openai/clip-vit-base-patch32", device="cpu"
+# )
 
 # @tool
 # def image_describe(img_bytes: bytes, top_k: int = 3) -> str:
@@ -200,8 +198,6 @@ def vision_task(img_bytes: bytes, question: str) -> str:
 # --------------------------------------------------------------------------- #
 #                                 FILE  UTILS                                 #
 # --------------------------------------------------------------------------- #
-
-
 @tool
 def run_py(code: str) -> str:
     """Execute Python code in a sandboxed subprocess and return last stdout line."""
@@ -237,27 +233,41 @@ def transcribe_via_whisper(mp3_bytes: bytes) -> str:
 
 @tool
 def analyze_excel_file(xls_bytes: bytes, question: str) -> str:
-    """Generic Excel/CSV aggregation handler."""
-    import pandas as pd
+    "Analyze Excel or CSV file by passing the data preview to LLM and getting the Python Pandas operation to run"
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, max_tokens=64)
 
-    # Try both Excel and CSV loaders
+    # 1. full dataframe
     try:
         df = pd.read_excel(BytesIO(xls_bytes))
     except Exception:
         df = pd.read_csv(BytesIO(xls_bytes))
 
-    numeric = df.select_dtypes("number")
-    if numeric.empty:
-        return "No numeric data"
+    for col in df.select_dtypes(include="number").columns:
+        df[col] = df[col].astype(float)
 
-    q = question.lower()
-    if any(term in q for term in ["total", "sum", "aggregate"]):
-        return f"{numeric.sum().sum():.2f}"
-    if any(term in q for term in ["average", "mean"]):
-        return f"{numeric.mean().mean():.2f}"
+    # 2. ask the LLM for a single expression
+    prompt = get_prompt(
+        prompt_key="excel_analysis_one_liner", preview=df.head(5).to_dict(orient="list")
+    )
+    expr = llm.invoke(prompt).content.strip()
 
-    # Fallback: return first 10 rows as csv for LLM to reason on
-    return df.head(10).to_csv(index=False)
+    # 3. run it on the FULL df
+    try:
+        result = eval(expr, {"df": df, "pd": pd, "__builtins__": {}})
+        # ── normalize scalars to string -------------------------------------------
+        if isinstance(result, np.generic):
+            # keep existing LLM formatting (e.g. {:.2f}) if it's already a str
+            result = float(result)  # → plain Python float
+            return f"{result:.2f}"  # or str(result) if no decimals needed
+
+        # DataFrame / Series → single-line string
+        return (
+            result.to_string(index=False)
+            if hasattr(result, "to_string")
+            else str(result)
+        )
+    except Exception as e:
+        return f"eval_error:{e}"
 
 
 __all__ = [
