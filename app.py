@@ -72,8 +72,8 @@ def classify(state: AgentState) -> AgentState:  # noqa: D401
     """Label the task so we know which toolchain to invoke."""
     question = state["question"]
 
-    values = get_args(_LABELS)  # -> ("math", "youtube", ...)
-    parsed_labels = ", ".join(repr(v) for v in values)
+    label_values = set(get_args(_LABELS))  # -> ("math", "youtube", ...)
+    parsed_labels = ", ".join(repr(v) for v in label_values)
     resp = (
         _llm_router.invoke(
             _CLASSIFY_PROMPT.format(question=question, labels=parsed_labels)
@@ -81,7 +81,7 @@ def classify(state: AgentState) -> AgentState:  # noqa: D401
         .content.strip()
         .lower()
     )
-    state["label"] = resp if resp in _LABELS else "general"
+    state["label"] = resp if resp in label_values else "general"
     return state
 
 
@@ -427,13 +427,13 @@ if __name__ == "__main__":
 
 
 ## For Local testing
-# if __name__ == "__main__":
-#     agent = GAIAAgent()
-#     while True:
-#         try:
-#             q = input("\nEnter question (or blank to quit): ")
-#         except KeyboardInterrupt:
-#             break
-#         if not q.strip():
-#             break
-#         print("Answer:", agent(q))
+if __name__ == "__main__":
+    agent = GAIAAgent()
+    while True:
+        try:
+            q = input("\nEnter question (or blank to quit): ")
+        except KeyboardInterrupt:
+            break
+        if not q.strip():
+            break
+        print("Answer:", agent(q))
