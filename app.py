@@ -22,7 +22,7 @@ from tools import (
 # --------------------------------------------------------------------------- #
 DEFAULT_API_URL: str = "https://agents-course-unit4-scoring.hf.space"
 MODEL_NAME: str = "o4-mini"  # "gpt-4.1-mini"
-TEMPERATURE: float = 0.1  # deterministic
+TEMPERATURE: float = 0.1
 
 _SYSTEM_PROMPT = """You are a precise research assistant. Return ONLY the literal answer - no preamble.
 If the question asks for a *first name*, output the first given name only.
