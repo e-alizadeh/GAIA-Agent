@@ -427,13 +427,13 @@ if __name__ == "__main__":
 
 
 ## For Local testing
-if __name__ == "__main__":
-    agent = GAIAAgent()
-    while True:
-        try:
-            q = input("\nEnter question (or blank to quit): ")
-        except KeyboardInterrupt:
-            break
-        if not q.strip():
-            break
-        print("Answer:", agent(q))
+# if __name__ == "__main__":
+#     agent = GAIAAgent()
+#     while True:
+#         try:
+#             q = input("\nEnter question (or blank to quit): ")
+#         except KeyboardInterrupt:
+#             break
+#         if not q.strip():
+#             break
+#         print("Answer:", agent(q))
