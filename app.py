@@ -116,7 +116,7 @@ def gather_context(state: AgentState) -> AgentState:
             # ── Audio --------------------------------------------------------
             if "audio" in ctype:
                 print("[DEBUG] Working with an audio attachment file")
-                state["context"] = transcribe_via_whisper.invoke({"mp3_bytes": blob})
+                state["context"] = transcribe_via_whisper.invoke({"audio_bytes": blob})
                 state["label"] = "audio"
                 return state
 
