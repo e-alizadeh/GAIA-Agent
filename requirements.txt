@@ -1,12 +1,26 @@
+# ── core UI / infra
 gradio
 requests
+pandas==2.2.3
+
+# ── LangGraph + LangChain stack
 langgraph==0.4.7
 langchain_openai==0.3.18
 langchain_core==0.3.61
 langchain==0.3.25
 langchain_community==0.3.24
-pandas==2.2.3
-duckduckgo-search==8.0.2
-youtube-transcript-api==1.0.3
-openpyxl==3.1.5
-wikipedia==1.4.0
+langchain-groq==0.3.2
+
+# ── Retrieval helpers
+duckduckgo-search==8.0.2          # for DuckDuckGo wrapper
+tavily-python==0.3.3              # TavilySearchResults tool
+wikipedia==1.4.0                  # WikipediaLoader
+
+# ── Media utilities
+youtube-transcript-api==1.0.3  # YouTube transcripts
+openpyxl==3.1.5                # Excel parsing when GAIA attaches .xlsx
+Pillow>=10.2.0                 # image handling for transformers
+
+# ── Lightweight vision model
+transformers>=4.41.2
+torch>=2.3.0                   # auto-installs CPU wheels on HF Spaces
