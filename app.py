@@ -1,407 +1,197 @@
-import ast
-import json
-import operator
 import os
 import re
-from functools import lru_cache
-from io import BytesIO
-from typing import TypedDict
-from urllib import parse
+from typing import Literal, TypedDict
 
 import gradio as gr
 import pandas as pd
 import requests
-from langchain.agents import tool
-from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
-from wikipedia import summary as wiki_summary
-from youtube_transcript_api import YouTubeTranscriptApi
 
-# --- Constants ---
+from tools import (
+    calculator,
+    image_describe,
+    web_multi_search,
+    wiki_search,
+    youtube_transcript,
+)
+
+# --------------------------------------------------------------------------- #
+#                              CONFIGURATION                                  #
+# --------------------------------------------------------------------------- #
 DEFAULT_API_URL: str = "https://agents-course-unit4-scoring.hf.space"
-OPENAI_MODEL_NAME: str = "gpt-4.1-mini-2025-04-14"
-OPENAI_MODEL_TEMPERATURE: float = 0.1
+MODEL_NAME: str = "o4-mini"  # "gpt-4.1-mini"
+TEMPERATURE: float = 0.1  # deterministic
 
-# ----- THIS IS WERE YOU CAN BUILD WHAT YOU WANT ------
-# --------------------------------------------------------------------------- #
-# -----------------------------  SAFE CALCULATOR  --------------------------- #
-# --------------------------------------------------------------------------- #
-_ALLOWED_OPS = {
-    ast.Add: operator.add,
-    ast.Sub: operator.sub,
-    ast.Mult: operator.mul,
-    ast.Div: operator.truediv,
-    ast.Pow: operator.pow,
-    ast.USub: operator.neg,
-}
-
-
-def _safe_eval(node: ast.AST) -> int | float | complex:
-    if isinstance(node, ast.Constant):  # literal number
-        return node.n
-    if isinstance(node, ast.UnaryOp) and type(node.op) in _ALLOWED_OPS:
-        return _ALLOWED_OPS[type(node.op)](_safe_eval(node.operand))
-    if isinstance(node, ast.BinOp) and type(node.op) in _ALLOWED_OPS:
-        return _ALLOWED_OPS[type(node.op)](
-            _safe_eval(node.left), _safe_eval(node.right)
-        )
-    raise ValueError("Unsafe or unsupported expression")
-
-
-@tool
-def calculator(expression: str) -> str:
-    """Calculate mathematical expressions safely."""
-    try:
-        tree = ast.parse(expression, mode="eval")
-        return str(_safe_eval(tree.body))
-    except Exception as exc:
-        return f"calc_error:{exc}"
-
+_SYSTEM_PROMPT = """You are a precise research assistant. Return ONLY the literal answer - no preamble.
+If the question asks for a *first name*, output the first given name only.
+If the answer is numeric, output digits only (no commas, units, or words).
+"""
 
 # --------------------------------------------------------------------------- #
-# -----------------------------     WEB SEARCH    --------------------------- #
+#                           QUESTION  CLASSIFIER                               #
 # --------------------------------------------------------------------------- #
-@lru_cache(maxsize=128)
-def _search_duckduckgo(query: str, k: int = 5) -> list[dict[str, str]]:
-    """Returns the top-k DuckDuckGo results as a list of {title, snippet, link}. Caches identical queries."""
-    try:
-        wrapper = DuckDuckGoSearchAPIWrapper(max_results=k)
-        raw = wrapper.results(query, max_results=k)
-        cleaned = []
-        for hit in raw[:k]:
-            cleaned.append(
-                {
-                    "title": hit.get("title", "")[:120],
-                    "snippet": hit.get("snippet", "")[:200],
-                    "link": hit.get("link", "")[:200],
-                }
-            )
-        return cleaned
-    except Exception as e:
-        print(f"Search error: {e}")
-        return []
 
+_LABELS = {"math", "youtube", "image", "general"}
 
-@tool
-def web_multi_search(query: str, k: int = 5) -> str:
-    """
-    Multi-backend search. JSON list of {title,snippet,link}.
-    Order: DuckDuckGo → Wikipedia → Google Lite JSON.
-    """
-    try:
-        hits = _search_duckduckgo(query, k)
-        if hits:
-            print("DuckDuckGo search is used")
-            return json.dumps(hits, ensure_ascii=False)
-    except Exception:
-        pass
+_CLASSIFY_PROMPT = """You are a router that labels the user question with exactly one of the following categories:
+{labels}.
 
-    # Fallback 2: Wikipedia single-article summary
-    try:
-        page = wiki_summary(query, sentences=2, auto_suggest=False)
-        print("Fallback 2 is used")
+User question:
+{question}
 
-        return json.dumps([{"title": "Wikipedia", "snippet": page, "link": ""}])
-    except Exception:
-        pass
-
-    # Fallback 3: simple Google (no key) – tiny quota but better than nothing
-    try:
-        url = "https://r.jina.ai/http://api.allorigins.win/raw?url=" + parse.quote(
-            "https://lite.duckduckgo.com/lite/?q=" + query
-        )
-        txt = requests.get(url, timeout=10).text[:600]
-        print("Fallback 3 is used")
-        return json.dumps(
-            [{"title": "Google-lite", "snippet": re.sub(r"<.*?>", "", txt), "link": ""}]
-        )
-    except Exception as e:
-        return f"search_error:{e}"
-
-
-@tool
-def youtube_transcript(url: str, num_first_chars: int = 10_000) -> str:
-    """Returns the YouTube transcript (first `num_first_chars` characters only)."""
-    video_id = re.search(r"v=([A-Za-z0-9_\-]{11})", url)
-    if not video_id:
-        return "yt_error: id"
-    try:
-        ytt_api = YouTubeTranscriptApi()
-        fetched_transcript = ytt_api.fetch(video_id=video_id.group(1)).to_raw_data()
-        transcript_str = " ".join([x["text"] for x in fetched_transcript])
-        return transcript_str[:num_first_chars]
-    except Exception as e:
-        return f"yt_error: {e}"
-
-
-# --------------------------------------------------------------------------- #
-#                                HELPER FUNCTIONS                             #
-# --------------------------------------------------------------------------- #
-def _needs_calc(q: str) -> bool:
-    """Check if question is purely mathematical."""
-    math_expr = re.compile(r"^\s*[\d\.\s\+\-\*/\(\)]+?\s*$")
-    return bool(math_expr.match(q))
-
-
-def _extract_search_terms(question: str) -> str:
-    key = re.findall(r"[A-Za-z0-9']+", question.lower())
-    phrase = " ".join(key)
-    # if we lost critical tokens (length diff > 40 %), fallback to full q
-    return phrase if len(phrase) > 0.6 * len(question) else question
-
-
-def _summarize_results(results_json: str, max_hits: int = 3) -> str:
-    """Turn JSON list of hits into a compact text context for the LLM."""
-    if not results_json or not results_json.lstrip().startswith("["):
-        # Not JSON or empty → return raw text
-        return results_json
-
-    try:
-        hits = json.loads(results_json)[:max_hits]
-        context_parts = []
-        for i, h in enumerate(hits, 1):
-            title = h.get("title", "")
-            snippet = h.get("snippet", "")
-            if title or snippet:
-                context_parts.append(f"{i}. {title}: {snippet}")
-        return "\n".join(context_parts)
-    except Exception as e:
-        print(f"Error summarizing results: {e}")
-        return ""
+Label:
+"""
 
 
 # --------------------------------------------------------------------------- #
 # -------------------------------  AGENT STATE  ----------------------------- #
 # --------------------------------------------------------------------------- #
 class AgentState(TypedDict):
-    task_id: str
     question: str
-    answer: str
-    search_results: str
+    label: Literal["math", "youtube", "image", "general"]
     context: str
-    reasoning_steps: list[str]
-    tools_used: list[str]
+    answer: str
+    confidence: float
+    task_id: str | None = None
+
+
+# --------------------------------------------------------------------------- #
+#                         NODES  (LangGraph  functions)                        #
+# --------------------------------------------------------------------------- #
+
+_llm_router = ChatOpenAI(model=MODEL_NAME)
+_llm_answer = ChatOpenAI(model=MODEL_NAME)
+
+
+def classify(state: AgentState) -> AgentState:  # noqa: D401
+    """Label the task so we know which toolchain to invoke."""
+    question = state["question"]
+    resp = (
+        _llm_router.invoke(
+            _CLASSIFY_PROMPT.format(question=question, labels=", ".join(_LABELS))
+        )
+        .content.strip()
+        .lower()
+    )
+    state["label"] = resp if resp in _LABELS else "general"
+    return state
+
+
+def gather_context(state: AgentState) -> AgentState:
+    question, label = state["question"], state["label"]
+
+    matched_pattern = r"https?://\S+"
+    matched_obj = re.search(matched_pattern, question)
+
+    if label == "math":
+        print("[TOOL] calculator")
+        expr = re.sub(r"\s+", "", question)
+        state["context"] = calculator.invoke({"expression": expr})
+    elif label == "youtube" and matched_obj:
+        print("[TOOL] youtube_transcript")
+        if matched_obj:
+            url = matched_obj[0]
+            state["context"] = youtube_transcript.invoke({"url": url})
+    elif label == "image" and matched_obj:
+        print("[TOOL] image")
+        if matched_obj:
+            url = matched_obj[0]
+            state["context"] = image_describe.invoke({"image_url": url})
+    else:  # general
+        print("[TOOL] general")
+        search_json = web_multi_search.invoke({"query": question})
+        wiki_text = wiki_search.invoke({"query": question})
+        state["context"] = f"{search_json}\n\n{wiki_text}"
+
+    return state
+
+
+def generate_answer(state: AgentState) -> AgentState:
+    # Deterministic calculator path
+    if state["label"] == "math":
+        state["answer"] = state["context"].strip()
+        state["confidence"] = 0.9
+        return state
+
+    prompt = [
+        SystemMessage(content=_SYSTEM_PROMPT),
+        HumanMessage(
+            content=f"Question: {state['question']}\n\nContext:\n{state['context']}\n\nAnswer:"
+        ),
+    ]
+    raw = _llm_answer.invoke(prompt).content.strip()
+    state["answer"] = raw
+    state["confidence"] = 0.5
+    return state
+
+
+def validate(state: AgentState) -> AgentState:
+    """Simple format + confidence gate."""
+    txt = re.sub(r"^(final answer:?\s*)", "", state["answer"], flags=re.I).strip()
+
+    # If question demands a single token (first name / one word), enforce it
+    if any(kw in state["question"].lower() for kw in ["first name", "single word"]):
+        txt = txt.split(" ")[0]
+
+    txt = txt.rstrip(".")
+    if not txt or len(txt.split()) > 6 or state["confidence"] < 0.2:
+        txt = "I don’t know"
+
+    state["answer"] = txt
+    return state
+
+
+# --------------------------------------------------------------------------- #
+#                              BUILD  THE  GRAPH                              #
+# --------------------------------------------------------------------------- #
+
+
+def build_graph() -> StateGraph:
+    g = StateGraph(AgentState)
+    g.set_entry_point("classify")
+
+    g.add_node("classify", classify)
+    g.add_node("gather", gather_context)
+    g.add_node("generate", generate_answer)
+    g.add_node("validate", validate)
+
+    g.add_edge("classify", "gather")
+    g.add_edge("gather", "generate")
+    g.add_edge("generate", "validate")
+    g.add_edge("validate", END)
+
+    return g.compile()
 
 
 # --------------------------------------------------------------------------- #
 # -------------------------------  GAIA AGENT  ------------------------------ #
 # --------------------------------------------------------------------------- #
 class GAIAAgent:
-    """LangGraph-powered agent targeting GAIA Level-1 tasks."""
-
-    SYSTEM_PROMPT = """You are an expert research assistant that provides accurate, concise answers.
-
-    IMPORTANT INSTRUCTIONS:
-    1. Answer with ONLY the specific information requested - no extra explanation
-    2. For numerical answers, provide just the number
-    3. For names, provide just the name(s)
-    4. For yes/no questions, answer "Yes" or "No"
-    5. Use the provided context carefully to find the exact answer
-    6. Be precise and factual
-
-    Return ONLY the final answer."""
+    """Callable wrapper used by run_and_submit_all."""
 
     def __init__(self) -> None:
-        try:
-            self.llm = ChatOpenAI(
-                model=OPENAI_MODEL_NAME,
-                temperature=OPENAI_MODEL_TEMPERATURE,
-                api_key=os.getenv("OPENAI_API_KEY"),
-            )
-            print(f"Model name: '{self.llm.model_name}'")
-            print(f"Model temperature: {self.llm.temperature}")
-        except Exception as e:
-            print(f"Warning: Could not initialize OpenAI model: {e}")
-            self.llm = None
+        self.graph = build_graph()
 
-        # Following is defined for book-keeping purposes
-        self.tools = [web_multi_search, calculator, youtube_transcript]
+    def __call__(self, question: str, task_id: str | None = None) -> str:
+        state: AgentState = {
+            "question": question,
+            "label": "general",
+            "context": "",
+            "answer": "",
+            "confidence": 0.0,
+            "task_id": task_id,
+        }
+        final = self.graph.invoke(state)
 
-        self.graph = self._build_graph()
+        # ── Debug trace ───────────────────────────────────────────────
+        route = final["label"]
+        llm_used = route != "math"  # math path skips the generation LLM
+        print(f"[DEBUG] route='{route}' | LLM_used={llm_used}")
+        # ─────────────────────────────────────────────────────────────
 
-    def _build_graph(self) -> StateGraph:
-        """Build the LangGraph workflow."""
-        workflow = StateGraph(AgentState)
-
-        # Add nodes
-        workflow.add_node("analyze_question", self._analyze_question)
-        workflow.add_node("route", self._route)
-        workflow.add_node("process_info", self._process_info)
-        workflow.add_node("generate_answer", self._generate_answer)
-        workflow.add_node("normalize_answer", self._normalize_answer)
-
-        # Add edges
-        workflow.set_entry_point("analyze_question")
-        workflow.add_edge("analyze_question", "route")
-        workflow.add_edge("route", "process_info")
-        workflow.add_edge("process_info", "generate_answer")
-        workflow.add_edge("generate_answer", "normalize_answer")
-        workflow.add_edge("normalize_answer", END)
-
-        return workflow.compile()
-
-    # ------------------ NODE IMPLEMENTATIONS ------------------ #
-
-    def _analyze_question(self, state: AgentState) -> AgentState:
-        q = state["question"]
-        state["reasoning_steps"] = [f"ANALYZE: {q}"]
-        return state
-
-    def _route(self, state: AgentState) -> AgentState:
-        question = state["question"]
-
-        # 1️⃣ Calculator path
-        if _needs_calc(question):
-            # 1) strip all whitespace
-            expr = re.sub(r"\s+", "", question)
-
-            # 2) remove ANY character that isn’t digit, dot, operator, or parenthesis
-            #    (kills “USD”, “kg”, YouTube IDs, etc.)
-            expr = re.sub(r"[^\d\.\+\-\*/\(\)]", "", expr)
-
-            # 3) guard against empty string after cleaning
-            if expr:
-                result = calculator.invoke({"expression": expr})
-                state["answer"] = result
-                state["tools_used"].append("calculator")
-                state["reasoning_steps"].append(f"CALCULATE: {expr}")
-                return state
-
-        # 2️⃣ Attachment (Excel file)
-        if "attached" in question.lower() and "excel" in question.lower():
-            try:
-                task_id = state.get("task_id")
-                file_url = f"{DEFAULT_API_URL}/files/{task_id}"
-                xls_bytes = requests.get(file_url, timeout=10).content
-                df = pd.read_excel(BytesIO(xls_bytes))
-
-                total = df["sales"].sum()
-                state["answer"] = f"{total:.2f}"
-                state["tools_used"].append("excel_sum")
-                state["reasoning_steps"].append("xlsx")
-                return state
-            except Exception as e:
-                state["reasoning_steps"].append(f"xlsx_error:{e}")
-
-        # 3️⃣ YouTube search path
-        youtube_url = re.search(r"https?://www\.youtube\.com/\S+", question)
-        if youtube_url:
-            transcript = youtube_transcript.invoke({"url": youtube_url.group(0)})
-            state["context"] = transcript
-            state["tools_used"].append("youtube_transcript")
-            state["reasoning_steps"].append("YouTube")
-            return state
-
-        # 4️⃣ Web search path
-        query = _extract_search_terms(question)
-        results_json = web_multi_search.invoke({"query": query})
-
-        state["search_results"] = results_json
-        state["tools_used"].append("web_multi_search")
-        state["reasoning_steps"].append(f"SEARCH: {query}")
-        state["answer"] = ""
-
-        return state
-
-    def _process_info(self, state: AgentState) -> AgentState:
-        if state["context"]:
-            # ✅ If context already populated (e.g. YouTube transcript), keep it.
-            state["reasoning_steps"].append("PROCESS(skip)")
-            return state
-
-        if state["answer"]:
-            # If calc already produced an answer, just pass through
-            state["context"] = ""
-            return state
-
-        # Summarize search results for the LLM
-        summary = _summarize_results(state["search_results"])
-        if not summary:
-            summary = state["search_results"][:4000]  # cap to 4k chars
-
-        state["context"] = summary
-        state["reasoning_steps"].append("PROCESS")
-        return state
-
-    def _generate_answer(self, state: AgentState) -> AgentState:
-        if state["answer"]:
-            # calculator already filled it
-            print("\nCalculator is used ==> No LLM is invoked.\n")
-            return state
-
-        prompt = [
-            SystemMessage(content=self.SYSTEM_PROMPT),
-            HumanMessage(
-                content=(
-                    f"Question: {state['question']}\n\n"
-                    f"Context:\n{state['context']}\n\n"
-                    f"Answer:"
-                )
-            ),
-        ]
-        response = self.llm.invoke(prompt)
-        print(f">>> Raw response from LLM:\n{response}\n")
-        state["answer"] = response.content.strip()
-        state["reasoning_steps"].append("GENERATE ANSWER (LLM)")
-        return state
-
-    def _normalize_answer(self, state: AgentState) -> AgentState:
-        raw = state["answer"].strip()
-
-        # 1️⃣ If there’s a pure number anywhere, keep only that number
-        num = re.search(r"\b\d[\d,\.]*\b", raw)
-        if num and len(raw) > len(num.group(0)):
-            raw = num.group(0)
-
-        # 2️⃣ Normalize Yes / No
-        # if raw.lower().strip(".") in {"yes", "no"}:
-        #     raw = raw.capitalize()
-
-        # 3️⃣ Remove leading 'User:', 'Answer:', etc.
-        raw = re.sub(r"^(User|Answer|Context):\s*", "", raw, flags=re.I)
-
-        # 4️⃣ Strip trailing punctuation and double-spaces
-        raw = raw.rstrip(".").strip()
-
-        if not raw:
-            raw = "No answer found"
-
-        state["answer"] = raw
-        state["reasoning_steps"].append("NORMALIZED ANSWER")
-        return state
-
-    def __call__(self, question: str, task_id: str = "") -> str:
-        """Main agent call method."""
-        print(100 * "-")
-        print(f"GAIA Agent processing question: '{question}'")
-
-        try:
-            initial_state: AgentState = {
-                "task_id": task_id,
-                "question": question,
-                "answer": "",
-                "search_results": "",
-                "context": "",
-                "reasoning_steps": [],
-                "tools_used": [],
-            }
-
-            # Run the graph
-            final_state = self.graph.invoke(initial_state)
-
-            answer = final_state["answer"]
-            print(f"Agent reasoning: {' ==> '.join(final_state['reasoning_steps'])}")
-            print(f"Agent's context {final_state['context']}")
-            print(f"Tools used: {final_state['tools_used']}")
-            print(f"Final answer: {answer}")
-
-            return answer
-
-        except Exception as e:
-            print(f"Error in agent processing: {e}")
-            return f"Error processing question: {str(e)}"
+        return final["answer"]
 
 
 def run_and_submit_all(
@@ -576,6 +366,7 @@ with gr.Blocks() as demo:
 
     run_button.click(fn=run_and_submit_all, outputs=[status_output, results_table])
 
+
 if __name__ == "__main__":
     print("\n" + "-" * 30 + " App Starting " + "-" * 30)
     # Check for SPACE_HOST and SPACE_ID at startup for information
@@ -603,3 +394,16 @@ if __name__ == "__main__":
 
     print("Launching Gradio Interface for Basic Agent Evaluation...")
     demo.launch(debug=True, share=False)
+
+
+## For Local testing
+# if __name__ == "__main__":
+#     agent = GAIAAgent()
+#     while True:
+#         try:
+#             q = input("\nEnter question (or blank to quit): ")
+#         except KeyboardInterrupt:
+#             break
+#         if not q.strip():
+#             break
+#         print("Answer:", agent(q))
