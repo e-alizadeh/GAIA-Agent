@@ -3,15 +3,17 @@ import json
 import operator
 import re
 import subprocess
+from base64 import b64encode
 from functools import lru_cache
 from io import BytesIO
 from tempfile import NamedTemporaryFile
 
-import requests
 from langchain_community.document_loaders import WikipediaLoader
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import tool
+from langchain_openai import ChatOpenAI
 from transformers import pipeline
 from youtube_transcript_api import YouTubeTranscriptApi
 
@@ -140,14 +142,57 @@ _image_pipe = pipeline(
 )
 
 
+# @tool
+# def image_describe(img_bytes: bytes, top_k: int = 3) -> str:
+#     """Return the top-k CLIP labels for an image supplied as raw bytes.
+
+#     typical result for a random cat photo can be:
+#     [
+#         {'label': 'tabby, tabby cat', 'score': 0.41},
+#         {'label': 'tiger cat', 'score': 0.24},
+#         {'label': 'Egyptian cat', 'score': 0.22}
+#     ]
+#     """
+
+#     try:
+#         labels = _image_pipe(BytesIO(img_bytes))[:top_k]
+#         return ", ".join(f"{d['label']} (score={d['score']:.2f})" for d in labels)
+#     except Exception as exc:
+#         return f"img_error:{exc}"
+
+
 @tool
-def image_describe(image_url: str, top_k: int = 3) -> str:
-    """Download an image and return top-k labels using CLIP zero-shot classification."""
+def vision_task(img_bytes: bytes, question: str) -> str:
+    """
+    Pass the user's question AND the referenced image to a multimodal LLM and
+    return its first line of text as the answer.  No domain assumptions made.
+    """
+    sys_prompt = (
+        "You are a terse assistant. Respond with ONLY the answer to the user's "
+        "question—no explanations, no punctuation except what the answer itself "
+        "requires. If the answer is a chess move, output it in algebraic notation."
+    )
+    vision_llm = ChatOpenAI(
+        model="gpt-4o-mini",  # set OPENAI_API_KEY in env
+        temperature=0,
+        max_tokens=64,
+    )
     try:
-        resp = requests.get(image_url, timeout=10)
-        resp.raise_for_status()
-        labels = _image_pipe(BytesIO(resp.content))[:top_k]
-        return ", ".join(f"{d['label']} ({d['score']:.2f})" for d in labels)
+        b64 = b64encode(img_bytes).decode()
+        messages = [
+            SystemMessage(content=sys_prompt),
+            HumanMessage(
+                content=[
+                    {"type": "text", "text": question.strip()},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{b64}"},
+                    },
+                ]
+            ),
+        ]
+        reply = vision_llm.invoke(messages).content.strip()
+        return reply
     except Exception as exc:
         return f"img_error:{exc}"
 
@@ -220,7 +265,7 @@ __all__ = [
     "web_multi_search",
     "wiki_search",
     "youtube_transcript",
-    "image_describe",
+    "vision_task",
     "run_py",
     "transcribe_via_whisper",
     "analyze_excel_file",
