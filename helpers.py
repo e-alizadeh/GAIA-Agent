@@ -1,8 +1,14 @@
 import csv
-import io
-import zipfile
+from io import BytesIO
+from pathlib import Path
+from zipfile import BadZipFile, ZipFile
 
 import requests
+from yaml import safe_load
+
+CURRENT_DIR = Path(__file__).parent
+
+_PROMPTS = safe_load(CURRENT_DIR.joinpath("prompts.yaml").read_text())
 
 
 def fetch_task_file(api_url: str, task_id: str) -> tuple[bytes, str]:
@@ -29,11 +35,11 @@ def sniff_excel_type(blob: bytes) -> str:
     # 1️⃣ XLSX / XLSM / ODS  (ZIP container)
     if blob[:4] == b"PK\x03\x04":
         try:
-            with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+            with ZipFile(BytesIO(blob)) as zf:
                 names = set(zf.namelist())
                 if {"xl/workbook.xml", "[Content_Types].xml"} & names:
                     return "xlsx"
-        except zipfile.BadZipFile:
+        except BadZipFile:
             pass  # fall through
 
     # 2️⃣ Legacy XLS (OLE Compound File)
@@ -52,3 +58,8 @@ def sniff_excel_type(blob: bytes) -> str:
         pass
 
     return ""
+
+
+def get_prompt(prompt_key: str, **kwargs: str) -> str:
+    """Get a prompt by key and fill in placeholders via `.format(**kwargs)`"""
+    return _PROMPTS[prompt_key].format(**kwargs)

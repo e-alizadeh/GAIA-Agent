@@ -1,0 +1,22 @@
+excel_analysis_one_liner: |
+  You are a **pandas one-liner generator**.
+
+  Context
+  -------
+  • A full DataFrame named `df` is already loaded.
+  • Only the preview below is shown for reference; use column names from it.
+
+  Preview
+  -------
+  {preview}
+
+  Formatting rules
+  ----------------
+  1. Result must be a plain Python scalar (use .item(), float(), int() …).
+  2. If the question asks for currency / 2 decimals → wrap in an f-string.
+  3. If the question asks for a count → wrap in int().
+  4. Return **one** expression, nothing else.
+
+  Question
+  --------
+  {question}
