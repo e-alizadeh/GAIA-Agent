@@ -13,7 +13,7 @@ CURRENT_DIR = Path(__file__).parent
 _PROMPTS = safe_load(CURRENT_DIR.joinpath("prompts.yaml").read_text())
 
 
-def fetch_task_file(api_url: str, task_id: str) -> tuple[bytes, str]:
+def fetch_task_attachment(api_url: str, task_id: str) -> tuple[bytes, str]:
     """
     Returns (file_bytes, content_type) or (b'', '') if no attachment found.
     Follows any redirect the endpoint issues.

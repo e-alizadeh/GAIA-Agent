@@ -9,7 +9,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 
-from helpers import fetch_task_file, get_prompt, sniff_excel_type
+from helpers import fetch_task_attachment, get_prompt, sniff_excel_type
 from tools import (
     analyze_excel_file,
     calculator,
@@ -85,7 +85,7 @@ def gather_context(state: AgentState) -> AgentState:
 
     # ---- attachment detection ------------------------------------------------
     if task_id:
-        blob, ctype = fetch_task_file(api_url=DEFAULT_API_URL, task_id=task_id)
+        blob, ctype = fetch_task_attachment(api_url=DEFAULT_API_URL, task_id=task_id)
 
         if any([blob, ctype]):
             print(f"[DEBUG] attachment type={ctype} ")
