@@ -18,7 +18,7 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from youtube_transcript_api import YouTubeTranscriptApi
 
-from helpers import get_prompt
+from helpers import get_prompt, print_debug_trace
 
 # --------------------------------------------------------------------------- #
 #                       ARITHMETIC (SAFE CALCULATOR)                         #
@@ -54,6 +54,7 @@ def calculator(expression: str) -> str:
         value = _safe_eval(tree.body)
         return str(value)
     except Exception as exc:
+        print_debug_trace(exc, "Calculator")
         return f"calc_error:{exc}"
 
 
@@ -100,6 +101,7 @@ def web_multi_search(query: str, k: int = 6) -> str:
         ]
         return json.dumps(formatted, ensure_ascii=False)
     except Exception as exc:
+        print_debug_trace(exc, "Multi Search")
         return f"search_error:{exc}"
 
 
@@ -126,6 +128,7 @@ def youtube_transcript(url: str, chars: int = 10_000) -> str:
         text = " ".join(piece["text"] for piece in transcript)
         return text[:chars]
     except Exception as exc:
+        print_debug_trace(exc, "YouTube")
         return f"yt_error:{exc}"
 
 
@@ -187,6 +190,7 @@ def vision_task(img_bytes: bytes, question: str) -> str:
         reply = vision_llm.invoke(messages).content.strip()
         return reply
     except Exception as exc:
+        print_debug_trace(exc, "vision")
         return f"img_error:{exc}"
 
 
@@ -201,11 +205,12 @@ def run_py(code: str) -> str:
             f.write(code)
             path = f.name
         proc = subprocess.run(
-            ["python", path], capture_output=True, text=True, timeout=30
+            ["python", path], capture_output=True, text=True, timeout=45
         )
         out = proc.stdout.strip().splitlines()
         return out[-1] if out else ""
     except Exception as exc:
+        print_debug_trace(exc, "run_py")
         return f"py_error:{exc}"
 
 
@@ -223,6 +228,7 @@ def transcribe_via_whisper(audio_bytes: bytes) -> str:
         print(f"[DEBUG] Whisper transcript (first 200 chars): {output[:200]}")
         return output
     except Exception as exc:
+        print_debug_trace(exc, "Whisper")
         return f"asr_error:{exc}"
 
 
@@ -262,6 +268,7 @@ def analyze_excel_file(xls_bytes: bytes, question: str) -> str:
             else str(result)
         )
     except Exception as e:
+        print_debug_trace(e, "Excel")
         return f"eval_error:{e}"
 
 

@@ -150,6 +150,7 @@ def gather_context(state: AgentState) -> AgentState:
 def generate_answer(state: AgentState) -> AgentState:
     # Skip LLM for deterministic labels or tasks that already used LLMs
     if state["label"] in {"code", "excel", "image", "math"}:
+        print(f"[DEBUG] ANSWER ({state['label']}) >>> {state['answer']}")
         return state
 
     prompt = [
