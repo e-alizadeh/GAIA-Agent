@@ -8,13 +8,19 @@ router: |
 
   Guidelines
   ----------
-  • **math**: the question is a pure arithmetic/numeric expression.
-  • **youtube**: the question contains a YouTube URL and asks about its content.
-  • **code**: the task references attached Python code; caller wants its output.
-  • **excel**: the task references an attached .xlsx/.xls/.csv and asks for a sum, average, etc.
-  • **audio**: the task references an attached audio file and asks for its transcript or facts in it.
-  • **image**: the task could be either generic like "what is in the picture (e.g. Which animal is shown?) or could be a puzzle like asking for a *move, count, coordinate,* or other board-game tactic that needs an exact piece layout (e.g. "What is Black's winning move?").
-  • **general**: anything else (fallback).
+  - **math**: the question is a pure arithmetic/numeric expression.
+  - **youtube**: the question contains a YouTube URL and asks about its content.
+  - **code**: the task references attached Python code; caller wants its output.
+  - **excel**: the task references an attached .xlsx/.xls/.csv and asks for a sum, average, etc.
+  - **audio**: the task references an attached audio file and asks for its transcript or facts in it.
+  - **image**: the task could be either generic like "what is in the picture (e.g. Which animal is shown?) or could be a puzzle like asking for a *move, count, coordinate,* or other board-game tactic that needs an exact piece layout (e.g. "What is Black's winning move?").
+  - **search** : needs external factual information from the web
+  - **reason** : answer can be produced by analyzing the question text alone
+
+  Examples
+  ----------
+  (search) What is the last name of the person who founded Mercedes Benz company?
+  (reasoning) what is the third item of following list that is a fruit after sorting it alphabetically: ['parsley', 'orange', 'apple', 'coriander', 'lettuce', 'kiwi', 'apricot']" Answer is 'kiwi'
 
   ~~~
   User question:
@@ -46,8 +52,8 @@ excel_system: |
 
   Context
   -------
-  • A full DataFrame named `df` is already loaded.
-  • Only the preview below is shown for reference; use column names from it.
+  - A full DataFrame named `df` is already loaded.
+  - Only the preview below is shown for reference; use column names from it.
 
   Preview
   -------

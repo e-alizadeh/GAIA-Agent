@@ -138,12 +138,14 @@ def gather_context(state: AgentState) -> AgentState:
         if matched_obj:
             url = matched_obj[0]
             state["context"] = youtube_transcript.invoke({"url": url})
-    else:  # general
-        print("[TOOL] general")
+    elif label == "search":
+        print("[TOOL] web search")
         search_json = web_multi_search.invoke({"query": question})
         wiki_text = wiki_search.invoke({"query": question})
         state["context"] = f"{search_json}\n\n{wiki_text}"
-
+    else:
+        print("[TOOL] reasoning only (no search)")
+        state["context"] = ""
     return state
 
 
