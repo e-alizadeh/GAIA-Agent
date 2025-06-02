@@ -1,6 +1,8 @@
 import csv
 from io import BytesIO
 from pathlib import Path
+from sys import stderr
+from traceback import print_exception
 from zipfile import BadZipFile, ZipFile
 
 import requests
@@ -63,3 +65,13 @@ def sniff_excel_type(blob: bytes) -> str:
 def get_prompt(prompt_key: str, **kwargs: str) -> str:
     """Get a prompt by key and fill in placeholders via `.format(**kwargs)`"""
     return _PROMPTS[prompt_key].format(**kwargs)
+
+
+def print_debug_trace(err: Exception, label: str = "") -> None:
+    """
+    Print the full stack trace of `err` to STDERR so it shows up in HF logs.
+    """
+    banner = f"[TRACE {label}]" if label else "[TRACE]"
+    print(banner, file=stderr)
+    print_exception(type(err), err, err.__traceback__, file=stderr)
+    print("-" * 60, file=stderr)
