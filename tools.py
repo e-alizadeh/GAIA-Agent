@@ -201,7 +201,7 @@ def run_py(code: str) -> str:
             f.write(code)
             path = f.name
         proc = subprocess.run(
-            ["python", path], capture_output=True, text=True, timeout=4
+            ["python", path], capture_output=True, text=True, timeout=30
         )
         out = proc.stdout.strip().splitlines()
         return out[-1] if out else ""
