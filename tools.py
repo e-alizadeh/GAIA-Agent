@@ -87,17 +87,22 @@ def web_multi_search(query: str, k: int = 6) -> str:
         pass
 
     try:
-        tavily_hits = TavilySearchResults(max_results=k).invoke(query=query)
+        tavily_results = TavilySearchResults(
+            max_results=5,
+            # include_answer=True,
+            # search_depth="advanced",
+        )
+        search_result = tavily_results.invoke({"query": query})
         print(
-            f"[TOOL] TAVILY search is triggered with following response: {tavily_hits}"
+            f"[TOOL] TAVILY search is triggered with following response: {search_result}"
         )
         formatted = [
             {
-                "title": d.metadata.get("title", "")[:500],
-                "snippet": d.page_content[:750],
-                "link": d.metadata.get("source", "")[:300],
+                "title": d.get("title", "")[:500],
+                "snippet": d.get("content", "")[:750],
+                "link": d.get("url", "")[:300],
             }
-            for d in tavily_hits
+            for d in search_result
         ]
         return json.dumps(formatted, ensure_ascii=False)
     except Exception as exc:
