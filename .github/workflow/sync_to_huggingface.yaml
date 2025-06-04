@@ -1,0 +1,40 @@
+name: Sync to HuggingFace 🤗 hub
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  HF_USER: ealizadeh
+  HF_REPO: ${HF_USER}/gaia-agent
+
+jobs:
+  sync-to-hub:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Verify 🤗 HF repo exists
+        run: |
+          if git ls-remote "https://huggingface.co/${HF_REPO}.git" &> /dev/null; then
+            echo "✅ HF repo found: ${HF_REPO}"
+          else
+            echo "❌ HF repo not found at https://huggingface.co/${HF_REPO}.git" && exit 1
+          fi
+
+      - name: Push to HF repo 🤗
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          echo "→ Pushing local 'main' → HF '${HF_REPO}' (force)"
+          if git push -f "https://${HF_USER}:$HF_TOKEN@huggingface.co/${HF_REPO}.git" main; then
+            echo "✅ Push succeeded."
+          else
+            echo "❌ Push failed. Double-check 'HF_TOKEN' and permissions." && exit 1
+          fi
