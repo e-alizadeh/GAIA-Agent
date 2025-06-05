@@ -1,6 +1,13 @@
-# GAIA Level‑1 AI Agent via LangGraph
+# GAIA AI Agent via LangGraph
 
-This repository contains a **LangGraph‑powered** agent that scores over 30% on the GAIA Level‑1 benchmark *without any RAG leaks*. It routes questions, invokes the right tool, and returns an exact‑match string for the grader.
+This repository contains a **LangGraph‑powered** agent that scores over 30% on the GAIA Level‑1 benchmark *without any RAG leaks*.
+It routes questions, invokes the right tool, and returns an exact‑match string for the grader.
+
+## 📜 What is GAIA?
+
+**GAIA = _“General AI Assistants”_** – a multi-domain benchmark introduced in the paper   [GAIA: A Benchmark for General AI Assistants](https://arxiv.org/abs/2311.12983).
+The public leaderboard is hosted on Hugging Face:
+<https://huggingface.co/spaces/gaia-benchmark/leaderboard>
 
 ---
 
@@ -99,7 +106,7 @@ graph TD
 
 ## 📝 Prompt snippet
 
-All LLM prompts are available in `prompts.yaml`):
+All LLM prompts are available in `prompts.yaml`:
 
 ## 🛠️ Dev helpers
 
