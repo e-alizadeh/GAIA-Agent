@@ -33,7 +33,7 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           echo "→ Pushing local 'main' → HF '${HF_REPO}' (force)"
-          if git push -f "https://${HF_USER}:$HF_TOKEN@huggingface.co/${HF_REPO}.git" main; then
+          if git push -f "https://${HF_USER}:$HF_TOKEN@huggingface.co/spaces/${HF_REPO}.git" main; then
             echo "✅ Push succeeded."
           else
             echo "❌ Push failed. Double-check 'HF_TOKEN' and permissions." && exit 1
