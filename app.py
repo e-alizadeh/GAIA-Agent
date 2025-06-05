@@ -132,7 +132,7 @@ def gather_context(state: AgentState) -> AgentState:
     if label == "math":
         print("[TOOL] calculator")
         expr = re.sub(r"\s+", "", question)
-        state["context"] = calculator.invoke({"expression": expr})
+        state["answer"] = calculator.invoke({"expression": expr})
     elif label == "youtube" and matched_obj:
         print("[TOOL] youtube_transcript")
         if matched_obj:
