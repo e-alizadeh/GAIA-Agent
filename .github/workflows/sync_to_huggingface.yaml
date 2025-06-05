@@ -10,7 +10,7 @@ env:
   HF_REPO: ${HF_USER}/gaia-agent
 
 jobs:
-  sync-to-hub:
+  sync-to-hf-hub:
     runs-on: ubuntu-latest
 
     steps:
