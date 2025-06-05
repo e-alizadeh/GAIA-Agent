@@ -13,8 +13,8 @@ This repository contains a **LangGraph‑powered** agent that scores over 30% on
 | YouTube | `youtube_transcript_api` ➜ generate captions |
 | Spreadsheets | `analyze_excel_file` (*pandas* one‑liner generator) |
 | Attached code | Safe `subprocess` sandbox via `run_py` |
-| Audio | CPU‑only **openai‑whisper** |
-| Vision | CLIP zero‑shot (`transformers` pipeline) |
+| Audio | OpenAI‑Whisper |
+| Vision | VLM (GPT-4o-mini)|
 
 ---
 
@@ -94,7 +94,7 @@ graph TD
 - **route_question** routes to one of eight labels.
 - **invoke_tools** invokes the matching tool and stores context.
 - **synthesize_response** calls the answer LLM unless the answer was computed.
-- **format_output** normalises output for GAIA’s exact‑match scorer.
+- **format_output** normalizes output for GAIA’s exact‑match scorer.
 
 
 ## 📝 Prompt snippet
