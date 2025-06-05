@@ -31,7 +31,6 @@ TEMPERATURE: float = 0.1
 # --------------------------------------------------------------------------- #
 #                           QUESTION  CLASSIFIER                               #
 # --------------------------------------------------------------------------- #
-
 _LABELS = Literal[
     "math",
     "youtube",
@@ -62,7 +61,7 @@ _llm_router = ChatOpenAI(model=MODEL_NAME)
 _llm_answer = ChatOpenAI(model=MODEL_NAME)
 
 
-def classify(state: AgentState) -> AgentState:  # noqa: D401
+def route_question(state: AgentState) -> AgentState:  # noqa: D401
     """Label the task so we know which toolchain to invoke."""
     question = state["question"]
 
@@ -77,7 +76,7 @@ def classify(state: AgentState) -> AgentState:  # noqa: D401
     return state
 
 
-def gather_context(state: AgentState) -> AgentState:
+def invoke_tools_context(state: AgentState) -> AgentState:
     question, label, task_id = state["question"], state["label"], state["task_id"]
 
     matched_pattern = r"https?://\S+"
@@ -149,7 +148,7 @@ def gather_context(state: AgentState) -> AgentState:
     return state
 
 
-def generate_answer(state: AgentState) -> AgentState:
+def synthesize_response(state: AgentState) -> AgentState:
     # Skip LLM for deterministic labels or tasks that already used LLMs
     if state["label"] in {"code", "excel", "image", "math"}:
         print(f"[DEBUG] ANSWER ({state['label']}) >>> {state['answer']}")
@@ -170,7 +169,7 @@ def generate_answer(state: AgentState) -> AgentState:
     return state
 
 
-def validate(state: AgentState) -> AgentState:
+def format_output(state: AgentState) -> AgentState:
     txt = re.sub(r"^(final answer:?\s*)", "", state["answer"], flags=re.I).strip()
 
     # If question demands a single token (first name / one word), enforce it
@@ -184,21 +183,19 @@ def validate(state: AgentState) -> AgentState:
 # --------------------------------------------------------------------------- #
 #                              BUILD  THE  GRAPH                              #
 # --------------------------------------------------------------------------- #
-
-
 def build_graph() -> StateGraph:
     g = StateGraph(AgentState)
-    g.set_entry_point("classify")
+    g.set_entry_point("route_question")
 
-    g.add_node("classify", classify)
-    g.add_node("gather", gather_context)
-    g.add_node("generate", generate_answer)
-    g.add_node("validate", validate)
+    g.add_node("route_question", route_question)
+    g.add_node("invoke_tools", invoke_tools_context)
+    g.add_node("synthesize_response", synthesize_response)
+    g.add_node("format_output", format_output)
 
-    g.add_edge("classify", "gather")
-    g.add_edge("gather", "generate")
-    g.add_edge("generate", "validate")
-    g.add_edge("validate", END)
+    g.add_edge("route_question", "invoke_tools")
+    g.add_edge("invoke_tools", "synthesize_response")
+    g.add_edge("synthesize_response", "format_output")
+    g.add_edge("format_output", END)
 
     return g.compile()
 
