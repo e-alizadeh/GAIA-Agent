@@ -7,7 +7,7 @@ on:
 
 env:
   HF_USER: ealizadeh
-  HF_REPO: ${HF_USER}/gaia-agent
+  HF_REPO: ealizadeh/gaia-agent
 
 jobs:
   sync-to-hf-hub:
