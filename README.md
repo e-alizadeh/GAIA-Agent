@@ -78,7 +78,7 @@ Run **one** task from CLI (handy while tuning prompts):
 ##  Agent Routing & Tool-Execution Flow
 
 
-![GAIA  Agent Routing & Tool-Execution Flow](agent_routing_architecture.png)
+![GAIA  Agent Routing & Tool-Execution Flow](agent_routing.png)
 
 - **route_question** routes to one of eight labels.
 - **invoke_tools** invokes the matching tool and stores context.
