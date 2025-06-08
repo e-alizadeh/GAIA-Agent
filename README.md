@@ -75,43 +75,10 @@ Run **one** task from CLI (handy while tuning prompts):
 
 ---
 
-## 🧩 LangGraph architecture
+##  Agent Routing & Tool-Execution Flow
 
-```mermaid
-graph TD
-    Start([User Question]) --> RouteQuestion[📋 Route Question]
-    RouteQuestion --> ExecuteTools[🔧 Execute Tools]
-    ExecuteTools --> CheckAttachment{Has Attachment?}
-    CheckAttachment -->|Yes| AttachmentType{Attachment Type?}
-    CheckAttachment -->|No| CheckLabel{Label Type?}
 
-    AttachmentType -->|Python Code| RunPy[🐍 run_py]
-    AttachmentType -->|Excel/CSV| AnalyzeExcel[📊 analyze_excel_file]
-    AttachmentType -->|Audio| TranscribeAudio[🎵 transcribe_via_whisper]
-    AttachmentType -->|Image| VisionTask[👁️ vision_task]
-
-    CheckLabel -->|math| Calculator[🧮 calculator]
-    CheckLabel -->|youtube| YouTubeTranscript[📹 youtube_transcript]
-    CheckLabel -->|search| WebSearch[🔍 web_multi_search]
-    CheckLabel -->|general| NoTool[💭 No specific tool]
-
-    RunPy --> SynthesizeResponse[🧠 Synthesize Response]
-    AnalyzeExcel --> SynthesizeResponse
-    TranscribeAudio --> SynthesizeResponse
-    VisionTask --> SynthesizeResponse
-    Calculator --> SynthesizeResponse
-    YouTubeTranscript --> SynthesizeResponse
-    WebSearch --> SynthesizeResponse
-    NoTool --> SynthesizeResponse
-
-    SynthesizeResponse --> NeedsSynthesis{Needs Additional<br/>Synthesis?}
-    NeedsSynthesis -->|No: code excel<br/>image math| DirectAnswer[✅ Use tool output directly<br/>Already complete]
-    NeedsSynthesis -->|Yes: youtube audio<br/>search general| UseSynthesisLLM[🤖 Additional LLM synthesis<br/>Combine with context]
-
-    DirectAnswer --> FormatOutput[✨ Format Output]
-    UseSynthesisLLM --> FormatOutput
-    FormatOutput --> End([Final Answer])
-```
+![GAIA  Agent Routing & Tool-Execution Flow](agent_routing_architecture.png)
 
 - **route_question** routes to one of eight labels.
 - **invoke_tools** invokes the matching tool and stores context.
